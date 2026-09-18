@@ -67,6 +67,28 @@ skip() {
   return 0
 }
 
+# 规格文件定位（**唯一实现**）—— 供 `SPEC-COVERAGE` 与 `JUDGE-SELFTEST` 两段共用。
+#
+# 【2026-09-18 · B · ISS-152】为什么要抽成一个函数：候选表原先在两段**各抄一份**，
+# 「改一处、漏一处」就是**静默分叉**（一段找得到规格、另一段找不到），
+# 同 ISS-007 家族「两份实现会互相背书」。抽出来 = 一处改、两处生效。
+#
+# 候选顺序：`ANDYNGO_SPEC` → `.check/spec/` → 工作区根 → `$HOME/Desktop`。
+# ★ **不放写死的本机绝对路径**：本文件是**发布件**，载体自己不该带 `/c/Users/<本机用户>/…`
+#   （副本靠人工脱敏才不泄露）。原先第三候选正是那条写死路径，`$HOME/Desktop` 语义相同且可移植。
+# ★ **要放规格就放** `.check/spec/andyngo build.md.txt`（或设 `ANDYNGO_SPEC`）。
+#
+# 语义与改前**逐字一致**：`ANDYNGO_SPEC` 一旦非空就**原样返回**（哪怕该文件不存在 ——
+# 调用方自己的 `-f` 检查会按「找不到」skip），**不**因为环境变量指错就悄悄回退到候选表。
+find_spec() {
+  if [[ -n "${ANDYNGO_SPEC:-}" ]]; then printf '%s' "$ANDYNGO_SPEC"; return 0; fi
+  local c
+  for c in "$ROOT/.check/spec/andyngo build.md.txt" "$ROOT/andyngo build.md.txt" "$HOME/Desktop/andyngo build.md.txt"; do
+    if [[ -f "$c" ]]; then printf '%s' "$c"; return 0; fi
+  done
+  return 1
+}
+
 {
   echo "=== ACCEPTANCE ==="
   if [[ -f "$ROOT/.check/acceptance.js" ]]; then
@@ -217,16 +239,12 @@ skip() {
   # 口径二按**锚点文本**「一页速查卡」定位。而**规格是会被改的**（CHG-106 实证：改过第 156/168/1195 行）。
   # 改一次规格就可能让口径一的区间**指到别处** —— 此时口径一报 `UNVERIFIED(2)` 而口径二照常有结论，
   # **两个口径给出不同结论**。没有下面那段「结论对照」，读者会把「口径一红」误读成「入口覆盖坏了」。
-  # 规格在**项目外**（无版本管理），路径由 `ANDYNGO_SPEC` 指定；未设则按 `judge-selftest.sh:27`
-  # **同一张候选表**探测；找不到就 `SKIP` —— **不报 FAIL**，不是每台机器都有那份规格。
+  # 规格在**项目外**（无版本管理），路径由 `ANDYNGO_SPEC` 指定；未设则按 `find_spec()`
+  # 的候选表探测（**与 `JUDGE-SELFTEST` 段共用同一份实现**，见文件上方 `find_spec`）；找不到就
+  # `SKIP` —— **不报 FAIL**，不是每台机器都有那份规格。
   echo
   echo "=== SPEC-COVERAGE (速查卡 ↔ 判事件表) ==="
-  SPEC="${ANDYNGO_SPEC:-}"
-  if [[ -z "$SPEC" ]]; then
-    for c in "$ROOT/andyngo build.md.txt" "$HOME/Desktop/andyngo build.md.txt" "/c/Users/<user>/Desktop/andyngo build.md.txt"; do
-      if [[ -f "$c" ]]; then SPEC="$c"; break; fi
-    done
-  fi
+  SPEC=$(find_spec)
   if [[ -z "$SPEC" || ! -f "$SPEC" ]]; then
     skip "未找到规格（可用 ANDYNGO_SPEC 指定路径）"
   elif [[ ! -f "$ROOT/skills/andyngo/SKILL.md" ]]; then
@@ -448,12 +466,7 @@ skip() {
   #   内层判据打行首 `SKIP ` 污染计数契约）。
   #   **修法照 v5.0 载体**：**载体先探规格**，探不到就 `skip`（**根本不跑判据**）；
   #   探到才跑，且**捕获输出 + 缩进 4 格**（防内层行首 `SKIP ` 污染计数契约）。
-  NGSPEC="${ANDYNGO_SPEC:-}"
-  if [[ -z "$NGSPEC" ]]; then
-    for c in "$ROOT/andyngo build.md.txt" "$HOME/Desktop/andyngo build.md.txt" "/c/Users/<user>/Desktop/andyngo build.md.txt"; do
-      if [[ -f "$c" ]]; then NGSPEC="$c"; break; fi
-    done
-  fi
+  NGSPEC=$(find_spec)
   if [[ ! -f "$ROOT/.check/tests/judge-selftest.sh" ]]; then
     skip "无 .check/tests/judge-selftest.sh"
   elif [[ -z "$NGSPEC" || ! -f "$NGSPEC" ]]; then
