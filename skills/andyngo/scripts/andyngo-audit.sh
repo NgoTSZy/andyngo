@@ -31,6 +31,9 @@ REPORT="$OUT/audit-$TS.txt"
 # 在**机器读的那一半**里长得一样（都只是「少了一条 EXIT= 行」）—— 这是 ISS-096 的同族假绿，
 # 只是换了个入口。现在：`SKIP` 计入 `SKIPPED`，收尾三态：
 #     `FAILED>0 → 1` · 否则 `SKIPPED>0 → 2` · 否则 `0`
+# ★ 【2026-09-18 · W23 J20 · ISS-153】`SKIPPED` 有**两个来源**：
+#   ① 载体自己 `skip()`（「本机没有这个件」）② **段返回 `rc=2`（内层判据拒跑）** —— 见 `seg()` 上方。
+#   两者都计入 `SKIPPED`、都打**行首** `SKIP `（计数契约，`audit-exitcode-test.sh` ⑤⑦）。
 # **`2` = 拒跑 / 结果不完整** —— 与本仓库其它组件（`write-lock.js` · `alloc.sh` ·
 # `check-protocol.js`）以及 automation §六 铁律「0 通过 / 1 失败 / 2 拒跑」一致。
 # **优先级：`FAILED` 优先于 `SKIPPED`** —— 「有段不合格」是**确定**的信号、「有段没跑成」是
@@ -41,6 +44,17 @@ SKIPPED=0  # `SKIP` 的处数（**「跑不成」的那一半** —— 见文件
 # 打印退出码行并累加失败数。两种用法：
 #   `cmd ; seg`       → 捕获 $?（函数体**第一条**就是 `local rc=$?`，中间不许插命令）
 #   `seg "$rc1" 尾注`  → 直接用已捕获的变量（段内已有 `rc1=$?` 那种写法）
+#
+# 【2026-09-18 · W23 J20 · ISS-153】**按 rc 分流，不是「非零即失败」。**
+# 改前：`if [ "$rc" != "0" ]; then FAILED=…` ⇒ 段返回 **2** 也被算成「**确定**不合格」，
+# 载体于是报 rc=1 —— 而 2 在本仓库的统一口径里是**拒跑**（`0 通过 / 1 失败 / 2 拒跑`）。
+# **实测复现**（`audit-exitcode-test.sh` ⑥「假拒跑」）：改前 `段返回 2 → 载体 rc=1`。
+# **同族**：ISS-149 只**逐例**把两个已知段（`write-lock-test.sh` / `judge-selftest.sh`）
+# 的 rc=2 改走 `skip`，**通用规则没进这里** ⇒ 第三个实例（`acceptance.js` 因 UNVERIFIED
+# 返回 2）当场复现。现在把规则放进 `seg()` **本身** —— **一处改，所有段生效**。
+# ★ **`rc=2` 分支必须同时打一行行首 `SKIP `**：`SKIPPED` 的唯一可见来源是收尾那个数，
+#   而报告里逐条的证据是行首 `SKIP ` 行；只计数不打行会让两者**口径分叉**（ISS-139 的形状）。
+#   `audit-exitcode-test.sh` ⑦ 是这条契约的守门人（三跑逐条比对计数与文本）。
 seg() {
   local rc=$?
   local tail=""
@@ -53,7 +67,15 @@ seg() {
   fi
   echo "EXIT=$rc$tail"
   SEGS=$((SEGS + 1))
-  if [ "$rc" != "0" ]; then FAILED=$((FAILED + 1)); fi
+  if [ "$rc" = "0" ]; then
+    :                              # 通过
+  elif [ "$rc" = "2" ]; then
+    # 拒跑（没跑成）—— 归 SKIPPED，不归 FAILED（ISS-153）
+    echo "SKIP 本段返回 rc=2（拒跑 / 未验证）—— 计入「没跑成」，不计「确定不合格」"
+    SKIPPED=$((SKIPPED + 1))
+  else
+    FAILED=$((FAILED + 1))
+  fi
   return 0
 }
 
@@ -103,7 +125,7 @@ find_spec() {
   # `.check/andyngo-integrity.js` **没有任何调用者**（只在文档里被提到，全是文字不是调用）。
   # 一段没人调用的判据 = 一条没有判据的规则，只是换了个地方藏着。
   echo
-  echo "=== INTEGRITY (I1-I5) ==="
+  echo "=== INTEGRITY (I1-I7) ==="
   if [[ -f "$ROOT/.check/andyngo-integrity.js" ]]; then
     ( cd "$ROOT" && node .check/andyngo-integrity.js 2>&1 )
     seg

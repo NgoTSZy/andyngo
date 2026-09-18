@@ -90,3 +90,31 @@ CHG-363 · ISS-152。**不新开 EVT** —— 「同一作业的收尾修复追�
 
 **打包**：`package_skill.py` 重建 `dist/andyngo.zip` —— **40248 → 40774 B** · **22 条目** · 根前缀 `andyngo` · 含本机路径的条目 **0** · 含 `.check` 的条目 **0** · `quick_validate.py` → `Skill is valid!` rc=0。
 
+
+【十一、ISS-153 已修（同一作业，不新开 EVT）】
+
+**触发**：用户裁决「合并为干净提交 + 强推」与「改用环境变量固定路径」执行完后，本轮按「减少对话，可以用任何方法全速进行任务」继续收尾 —— ISS-153 的修法在【十】里已写明（「未修的理由」= 余量不足），本轮补上。
+
+**改了什么（三处，都不动段名、不动段数）**：
+1. `skills/andyngo/scripts/andyngo-audit.sh` 的 `seg()`：`local rc=$?`；`$1` 是**纯数字**则取它当 rc（其余参数当尾巴拼进 `EXIT=` 行 —— **`EXIT=` 行与段名形状一字未改**）；按 rc 分流 —— `0` 通过 · `2` 计入 `SKIPPED` **并打一行行首 `SKIP `**（维持 ⑤⑦ 的 `grep -c '^SKIP '` 计数契约）· 其它非零计入 `FAILED`。
+2. `:84` 的陈旧段标签 `=== INTEGRITY (I1-I5) ===` → `(I1-I7)`（判据早已到 I7）。
+3. `.check/tests/audit-exitcode-test.sh` 加 **⑥ 假拒跑** + **⑦ 口径一致**（文件头「五组断言」→「**七组断言**」）。
+
+**双向反向断言（这是 ISS-153 原文自己写明的验收条件）**：
+- **改前**（同一把尺子 × 未改的载体）：`FAIL ⑥ 段返回 2 → 载体 rc=1（**应为 2** …）` · **9/10 · rc=1** ⇒ **缺陷精确复现**（不是推测）。
+- **改后**：**10/10 · rc=0**，逐条 —— ① 到达性 `EXIT=1` ✓ · ② 假失败 → rc=1 ✓（**假失败仍归 FAILED**，没被顺手改成 SKIP）· ③ 假成功 → rc=2（门不是恒红）· ⑤ 假成功跑 18 处 SKIP · ④ 报告形态未变（全部是 `EXIT=<数字>`）· ⑥-到达性 `EXIT=2` ✓ · ⑥ 假拒跑 → **rc=2** ✓ · ⑦ `fakefail` 18==18 · `fakeok` 18==18 · `fakeskip` 19==19。
+
+**实测读数（改后）**：
+
+| 对象 | 行数 | md5 |
+|---|---|---|
+| `skills/andyngo/scripts/andyngo-audit.sh` | 549 → **571** | `4c196e0b…` → **`e893b55e8487793905d9dc268b71d854`** |
+| `.check/tests/audit-exitcode-test.sh` | 144 → **194** | `68ff8375…` → **`a19ff918ccdd87bbaf7ba97cf44599a7`** |
+| `.check/record/issues.md` | 167 → **167** | `4d9d75f7…` → **`4877ed02695d41452ce80f3cc8afded3`** |
+| `.check/record/changes.md` | 372 → **375** | — |
+
+★ **尺子「改前」基线是从哪来的（方法，不是猜的）**：`file-history --list` 只到 `v3 = 144 行`（平台侧漏记了后面的块），而 **`145 行` 是我先前的预期值、不是实测值**。真实基线取自**发布副本**：`.check/tmp/publish/.check/tests/audit-exitcode-test.sh` = **144 行 / `68ff837512fb5a60e4bbcfc8c29c00e7`**，与源树 diff = **1 行改 + 51 行增**（144+51−1 = **194** ✓，与实测行数自洽）⇒ 副本当时与源树逐字一致，可作改前指纹。**教训**：`file-history` 的块会漏记，**改前指纹要以「磁盘上真能取到的那个版本」为准**（与「以改前实测的 md5 为准」同一条纪律）。
+
+**记录层判据（全绿）**：`probe-record-shape.js --scan` → `OK 三份记录全部合规 · 豁免 0 条` rc=0 · `record/newid.js --check` → `未登记撞号 0 · 悬空豁免 0` rc=0 · `probe-crossref.js --scan` → `命中 0 处 · 豁免 0 条 · 悬空 0` rc=0 · `andyngo-integrity.js` → **28 OK / 0 FAIL / 0 UNVERIFIED** rc=0 · `check-protocol.js` → rc=0。
+
+**边界（如实记）**：本节的 10/10 是**尺子**的读数（尺子内部会造三个假根各跑一遍载体逻辑），**不是**载体整体重跑 —— 载体整体读数见【十二】。
