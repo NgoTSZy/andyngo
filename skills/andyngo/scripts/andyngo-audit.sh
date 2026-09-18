@@ -578,6 +578,22 @@ find_spec() {
   else
     skip "无 .check/tests/host-config-risk.js"
   fi
+
+  # 【2026-09-18 加，W23 J26 · 把审计发现的 R3 从「报告里的一段话」变成「判据能看见的东西」】
+  # R3 = 「宿主留痕（projects/）无保留策略」—— 实测 3.64 GB / 123 文件，单个 3.27 GB。
+  # 本段**只让增长可见**（只读扫描 + 单文件阈值），**不清理任何东西**（删是破坏性动作）。
+  # ★ 阈值默认 1024 MB（`HOST_BLOAT_MB` 可覆盖）：**不写死「总体积」**，因为总体积会随会话数
+  #   自然增长而腐烂；「单文件 1 GB」才是**结构异常**（本机第二大 244 MB 的会话 .jsonl 不算异常）。
+  # ★ `projects/` **不存在** ⇒ 判据打 `ABSENT` 并 rc=0（**正常缺席 ≠ 缺失**，CHG-358 口径）；
+  #   存在但 0 文件 ⇒ rc=2 拒跑（防「空集 PASS」）。豁免登记带 `why` + 反查僵尸豁免（ISS-074）。
+  echo
+  echo "=== HOST-BLOAT ==="
+  if [[ -f "$ROOT/.check/tests/host-bloat.js" ]]; then
+    ( cd "$ROOT" && node .check/tests/host-bloat.js 2>&1 )
+    seg
+  else
+    skip "无 .check/tests/host-bloat.js"
+  fi
 } > "$REPORT" 2>&1
 
 # 【2026-09-16 加，W23 J14 · ISS-096】汇总 + 退出码。

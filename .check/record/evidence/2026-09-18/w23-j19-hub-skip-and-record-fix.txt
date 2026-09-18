@@ -451,5 +451,57 @@ J24 收尾时载体 rc=**0**；本轮上线新判据后 **rc=1**。**这不是�
 `CHG-391`（新判据 0→192）· `CHG-392`（载体 589→610）· `CHG-393`（`exit-codes.md` 59→60，**铁律 2 第十六次真实生效**）· `CHG-394`（报告 161→163，R1/R11 各加守门人行 + **删掉 R1 里「19 个判据」这个会腐烂的计数**）。
 **未做**：R2/R3/R5/R7/R10 仍未处置（R2 是价值判断；R3 要删数据；R5 要用户操作；R7 无判据；R10 动发布件）。
 
+---
+
+## 【十九、J26 —— R3 的守门人 `host-bloat.js`（2026-09-18）】
+
+**A. 起点**
+
+J25 的 ASK 没等到裁决（用户只回「继续」）。R1/R11 的红灯**保持亮着**（`host-config-risk.js` 报 3 条：H1 ×1 + H3 ×2），我**不擅自改宿主配置**（`extraAllowWrite` 里那些目录是**第三方工具的工作目录**，删了它们就写不了自己的状态 —— 有副作用且我无法评估）。
+⇒ 转**丙类**：R3（「工具输出全文落盘、没有任何判据」）**根本不该由人判** ⇒ 去加判据。
+
+**B. 量现状（改之前先量）**
+
+`projects/` = **3.64 GB / 123 文件**（`node .check/tests/host-bloat.js` 的实时输出，2026-09-18 08:2x）：
+- TOP1 **3274.4 MB** `projects/c-Users-andyngo-Documents-workbuddy/34b3b3a5-…/tool-results/call_00_36sXuH3CSTSDd0o19rUZ3478.txt`
+- TOP2 **244.7 MB** `projects/c-Users-andyngo-Documents-workbuddy/34b3b3a5-….jsonl`
+- TOP3 **75.2 MB** `projects/c-Users-andyngo-WorkBuddy AI-2026-09-03-09-35-29/b3917c4e-….jsonl`
+
+★ 这条量的过程本身**纠正了报告里的两个写死数字**：报告写 3.7 GB / 121 文件 / 236 MB，实测 3.64 GB / 123 文件 / 244.7 MB —— **目录在长，写死的读数就是腐烂源**（ISS-140）。
+
+**C. 新判据 `.check/tests/host-bloat.js`（0 → 189 行）**
+
+- 扫描面 = `projects/`（**只读递归**）；**B1**：单文件 > 阈值 ⇒ FAIL。
+- **阈值默认 1024 MB**，`HOST_BLOAT_MB` 可覆盖。★ **刻意不判「总体积」**：总体积随会话数**自然增长**会腐烂；「单文件 1 GB」才是**结构异常**（TOP2 的 244 MB 会话日志**不算异常** —— 假红守门人明确排除它）。
+- **豁免登记（`path` + `why`）+ 反查**（ISS-074）：僵尸豁免必红 · 缺 why 必红。
+- `projects/` **不存在** ⇒ 打 `ABSENT` 并 **rc=0**（**正常缺席 ≠ 缺失**，CHG-358 口径）；**存在但 0 文件** ⇒ **rc=2 拒跑**（防「空集 PASS」）。
+- **它不清理任何东西**（删是破坏性动作，且 R1 说删除保护关着）⇒ 它只负责**让增长可见**，处置由人决定。
+- **★ 不判的三条写进文件头**（如实写明，不假装已覆盖）：R3 的「**该不该留**」（保留策略 = 价值判断）· 清理动作本身。
+
+**D. 自测**
+
+- `node --check` ⇒ `SYNTAX OK`
+- 正常模式 ⇒ **rc=1**，FAIL **1 处**（3274.4 MB，正是 TOP1）· 豁免 0 条 · 僵尸豁免 0 条
+- `--inject` ⇒ **8/8**：B1 正向 · **244 MB 会话日志不算异常** · **恰好等于阈值不算超**（`>` 才算）· **阈值可配**（同样 244 MB 在 100 MB 阈值下**必红**）· 豁免生效 · **僵尸豁免必红** · **缺 why 必红** · **空集守门人**
+
+**E. 接进载体（589 → 626 行 · 23 → 24 段）**
+
+一次原子 `Edit`，`old_string` 取**跨多行**（`skip "无 .check/tests/host-config-risk.js"` / `fi` / `} > "$REPORT" 2>&1`）—— **不靠单行锚点**（ISS-133）。
+`bash -n` ⇒ rc=0 · `ruler-callpoint.js` ⇒ **rc=0**（`.check/tests/` 下 21 个文件全部有可执行调用点或已登记豁免 2 条）。
+
+**F. `exit 2` 登记（`exit-codes.md` 60 → 61）**
+
+`ins-line.js` 插在 `host-config-risk.js` 那行之后（**铁律 2 第十七次真实生效**）。★ 两个判据都用 `process.exit(2)` 而**没有字面 `exit 2`**，但 X1 的正则认 `process.exit(2)` ⇒ **确实被看见**（不是「看不见所以不用登记」）。
+**X1 双向验证**：① 登记前 `检查 34 处 · 命中 0 · FRESH`（J25 是 33 处 ⇒ 变大 = **被看见**）② `touch -d '90 minutes ago'` 推早 mtime 后 `检查 34 处 · 命中 0`、**`FRESH` 消失** ⇒ **登记真的生效**。
+
+**G. 记录层判据全绿**
+
+`probe-record-shape.js --scan` rc=0（三份记录全部合规）· `newid.js --check` rc=0 · `andyngo-integrity.js` rc=0（28 OK / 0 FAIL / 0 UNVERIFIED）· `check-protocol.js` rc=0 · `lock-coverage.js` rc=0 · `evt-field-shape.js` rc=0（95 条 EVT）· `hardcoded-count.js` rc=0 · `artifacts-index.js` rc=0（4 目录 ↔ 4 条登记）。
+
+**H. 落账 + 未做**
+
+`CHG-398`（新判据 0→189）· `CHG-399`（载体 610→626）· `CHG-400`（`exit-codes.md` 60→61，**铁律 2 第十七次真实生效**）· `CHG-401`（报告 163→164，R3 加守门人行 + 标题去掉「没有任何判据」+ 证据数字标为历史记述）。
+**未做**：R2 / R5 / R7 / R10 仍未处置（R2 价值判断 · R5 要用户操作 · R7 无判据 · R10 动发布件）；**R3 的「处置」这一半仍待裁决**；**R1/R11 的红灯仍亮着**（`host-config-risk.js` 3 条，处置待裁决）。
+
 
 
