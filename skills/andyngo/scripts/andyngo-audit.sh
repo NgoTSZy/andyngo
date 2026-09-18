@@ -539,6 +539,24 @@ find_spec() {
   else
     skip "无 .check/tests/battery-relative-test.sh"
   fi
+
+  # 【2026-09-18 加，W23 J21 · ISS-152 的「未落地的建议」结项】「**发布件不得含本机绝对路径**」
+  #   此前**只靠人工脱敏**（ISS-152 原文：「没有判据守着」）。判据 = `.check/tests/publish-privacy.js`。
+  # ★ **它判的是「本机真实家目录」而不是「路径形状」** —— 第一版按**形状**判，在真实树上
+  #   **假红 34 处**（发布副本里 8 个不同匹配串**全是占位符**：`C:/Users/x` · `/c/Users/...` ·
+  #   `C:\c\Users\...`），**没有一个是真用户名**。判形状 = 把占位符当泄漏 = 一个**总是响**的警报
+  #   （DEC-019）。**纪律：先量误伤再上线。** 改判真实家目录后：真实树命中 **0**。
+  # ★ 用户名**运行时**从 `os.homedir()` 取、**不写死**（写死 = 换台机器就失效，ISS-140 同族）。
+  # ★ 它自己带三态：`2` = 扫描面为空 / 取不到用户名 ⇒ **拒跑** ——
+  #   「**一个都没扫到**」不等于「**没有泄漏**」。
+  echo
+  echo "=== PUBLISH-PRIVACY ==="
+  if [[ -f "$ROOT/.check/tests/publish-privacy.js" ]]; then
+    ( cd "$ROOT" && node .check/tests/publish-privacy.js 2>&1 )
+    seg
+  else
+    skip "无 .check/tests/publish-privacy.js"
+  fi
 } > "$REPORT" 2>&1
 
 # 【2026-09-16 加，W23 J14 · ISS-096】汇总 + 退出码。
