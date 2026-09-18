@@ -580,7 +580,7 @@ J25 的 ASK 没等到裁决（用户只回「继续」）。R1/R11 的红灯**�
 
 **B. 做法（改宿主配置的四道保险）**
 
-① **先备份** `.check/record/evidence/2026-09-18/settings.json.pre-j28`，**md5 逐字相同**（`6dfb4b4e6de50eb98c3060e64578332d`）。
+① **先备份** `.check/record/evidence/2026-09-18/w23-j28-settings-json-pre.txt`，**md5 逐字相同**（`6dfb4b4e6de50eb98c3060e64578332d`）。
 ② 删 2 条（`Edit` 两处，**串行发**）。
 ③ **`JSON.parse` 断言**「改完仍是合法 JSON」+ 核对其余顶层键（`sandbox` / `claw` / `enabledPlugins` / `autoLaunchDesired` / `hooks`）与 `hooks.PostToolUse` 条数 **1 条，全未动**。实测：**1584 → 1489 字节** · `extraAllowWrite` **12 → 10 条** · 新 md5 `da76ffbd1a3fc6ca82fda4372a969434`。
 ④ **反向断言**：把 2 条**放回去** ⇒ 判据 **复现 3 处 FAIL**；删掉 ⇒ 回到 **1 处** ⇒ **判据确实跟着实物走**（不是恒绿）。还原后 md5 与删除后一致。
