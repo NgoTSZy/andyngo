@@ -1,0 +1,30 @@
+# W1 J1 · 环境探测证据
+
+命令：派 1 个 general-purpose 子代理，令其自报工具清单并实跑 shell / 写文件。
+时间：2026-09-15T13:49Z
+耗时：13 秒
+
+## 回传（原样）
+
+NEST_TOOLS=没有 automation_update, present_files, read_me, show_widget, Read, Write, Edit, Bash, PowerShell, Glob, Grep, TaskCreate, TaskGet, TaskUpdate, TaskList, WebFetch, WebSearch, TaskStop, TaskOutput, Skill, SendMessage, ToolSearch, DeferExecuteTool
+SHELL=probe-ok / GNU bash, version 5.3.15(1)-release (x86_64-pc-cygwin) / v22.22.2
+WRITE=成功
+NOTE=工具列表中没有名为 Agent/Task 的派生工具。另用工具检索「subagent spawn / spawn subagent」只返回金融检索与历史会话检索，无派生能力。
+
+## 判读
+
+| 规格 §1.4 假设 | 判定 | 判据 |
+|---|---|---|
+| 本环境只注册 SKILL.md | **成立** | 本会话注入的 skill 列表只含带 `SKILL.md` 的目录；14 个只有 `MODULE.md` 的目录一个都没进列表 |
+| 子代理不能嵌套 | **成立（深度=1）** | 子代理工具清单无 `Agent`；检索亦无派生入口 |
+| bash / node / python 可用 | **成立** | bash 5.3.15 · node v22.22.2 · python 3.13.14（**注意：不是 3.13.12**） |
+
+## 附带实测
+
+- `node` 已在 PATH 上（`command -v node` → `/c/Users/<user>/.workbuddy-ai/binaries/node/versions/22.22.2-2/node`）
+  → `andyngo-audit.sh` 里的裸 `node` 调用可直接用，**不需要**降级到 Python 版。
+- 工具链 grep / sed / awk / tail / head / date / printf / chmod / mkdir 共 9 个，全部 OK。
+
+## 结论
+
+**第五部分《适配表》不触发，无需任何降级。**

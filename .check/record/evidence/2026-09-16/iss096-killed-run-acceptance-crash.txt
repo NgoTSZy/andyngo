@@ -1,0 +1,14 @@
+=== ACCEPTANCE ===
+C:\Users\<user>\.workbuddy-ai\.check\acceptance.js:142
+    got.missIds = dm ? dm[1].split(',').filter(Boolean) : [];
+                ^
+
+TypeError: Cannot set properties of null (setting 'missIds')
+    at Object.<anonymous> (C:\Users\<user>\.workbuddy-ai\.check\acceptance.js:142:17)
+    at Module._compile (node:internal/modules/cjs/loader:1705:14)
+    at Object..js (node:internal/modules/cjs/loader:1838:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)

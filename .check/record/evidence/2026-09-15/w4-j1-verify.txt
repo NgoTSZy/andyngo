@@ -1,0 +1,86 @@
+# W4 J1 · 独立验收证据（子代理 general-purpose-3 回传原文）
+
+时间：2026-09-15T14:0xZ
+派发方式：独立 general-purpose 子代理，只读 `.workbuddy-ai`，实验沙箱 `C:\tmp\andyngo-verify\`
+契约：规格 §3.3「独立 = 独立执行，不许采信自述」
+
+---
+
+```
+FILES 规格=22 磁盘=22 差集=∅
+  · 我自己从第二部分树状图逐行数的文件数 = 22；第三部分标题也是 3.1–3.22 共 22 个，互相印证。
+  · 磁盘 `find skills/andyngo -type f | wc -l` = 22；差集空（规格有磁盘无=0，磁盘有规格无=0）。
+  · 规格自身缺陷：第二部分结尾写"共 20 个文件"，第四部分第 1 项又要求
+    `ls -R skills/andyngo/ | grep -c '\.md\|\.sh' → 20`。实测该命令输出 22（规格树本身就列了 22 个）。
+    即规格的"20"是错的，构建者按树建了 22 个，与树一致，非构建错误。
+
+FIDELITY 一致=6/6（指定抽检）｜全量一致=20/22，差异 2 个文件（即三处修复点）
+  指定 6 个抽检文件全部逐字节一致：SKILL.md / references/andyngo-event-protocol.md /
+  references/andyngo-record.md / references/C-assurance/andyngo-verify.md /
+  assets/andyngo-contract.md / scripts/andyngo-security-scan.sh。
+  我对全部 22 个文件都做了规格代码块↔磁盘逐行比对（归一化 CRLF/尾空行），只有下面 2 个文件有实质差异：
+  · scripts/andyngo-record.sh:14 → 规格 `EV="${7:-}"` vs 磁盘 `EV="${5:-}"`
+  · scripts/andyngo-record.sh:21 → 规格 `... "$4" "$5" "${6:---}" >> "$LOG"` vs 磁盘 `... "$4" "$5" >> "$LOG"`
+  · scripts/andyngo-record.sh:23 → 规格 `echo "EVT $SEQ $TS $1 $2 $3 $4 $5 ${6:---}"` vs 磁盘 `... "$4" "$5"`
+  · scripts/andyngo-audit.sh:15 → 规格 `node "$ROOT/.check/acceptance.js" 2>&1` vs 磁盘 `( cd "$ROOT" && node .check/acceptance.js 2>&1 )`
+
+DEFECT-A 真缺陷。
+  判据：清单第5项调用是 5 参 `record.sh W1 J1 OK -- /nonexist`，evidence 落在 $5；
+  规格写 `EV="${7:-}"`，实测取到空 → `[[ -n "" ]]` 恒假 → 校验永不触发。
+  跑归档原版：`RECORD_ROOT=… bash andyngo-record.sh.as-spec-135229 W1 J1 OK -- /nonexist`
+  → **EXIT=0**（清单要求 FAIL+退出码1）→ 规格原版做不到。
+  旁证：第五部分 node 版用 `[wave,job,status,art,ev]=argv.slice(2)`，ev 就是第 5 参，
+  说明正确变量是 $5。
+
+DEFECT-B 真缺陷。
+  判据：`printf "EVT %s %s %s %s %s %s %s\n"` 是 **7 个占位符**，后面跟了 **8 个实参**
+  （…"$5" "${6:---}"）。printf 会用完格式串后重复一遍。
+  实测：`printf ... 001 TS W1 J1 OK -- /nonexist "--" | cat -A` 输出 **两行**：
+  正常行 + 垃圾行 `EVT --      `。跑归档原版写 eventlog 后 `cat -A` 确认落盘就是 2 行。
+  这会直接打破规格自己的"seq 连续 / 事件数==派发数"校验（`grep -c '^EVT'` 每次多 1）。
+  修复删掉多余实参后 7 占位符 7 实参，输出 1 行，实测正确。
+
+DEFECT-C 真缺陷。
+  判据：Git Bash 下 `ROOT="$PWD"` 实测 = `/c/tmp/andyngo-verify/sb`。
+  原生 node.exe 收到 `/c/...` 会按"当前盘根"解析成 `C:\c\...`。
+  实测 `node "$ROOT/hello.js"` → `Error: Cannot find module 'C:\c\tmp\...\hello.js'` EXIT=1。
+  端到端跑归档原版 audit.sh（PROJECT_ROOT=/c/…）→ `Cannot find module 'c:\c\tmp\...\.check\acceptance.js'`，
+  脚本根本加载不到验收脚本。修复版实测能加载到 `C:\tmp\...\.check\acceptance.js`
+  （后续报的 `./battery-judge.js` 缺失是沙箱只拷了 acceptance.js 所致，与修复无关）。
+
+FIX-MINIMALITY 正当。
+  三处都是最小改动：A 只改 1 个字符位（$7→$5）；B 各删 1 个多余实参
+  （printf 与 echo 各删 `${6:---}`，保持 7 字段不变）；C 用 `cd "$ROOT" && node 相对路径`
+  规避 MSYS→原生路径不转换。没有更小改法能同时保住 7 字段事件格式 + Windows 下能真正加载 js。
+
+COUNTERPROOF 复现成功。
+  归档原始版本存在且与规格逐字节一致：
+  `.check/record/evidence/2026-09-15/andyngo-record.sh.as-spec-135229`、
+  `…/andyngo-audit.sh.as-spec-135432`。
+  在临时沙箱复跑：原版 record.sh `/nonexist` → EXIT=0 且 eventlog 落 2 行（应 FAIL/1/1 行）；
+  原版 audit.sh → Cannot find module。未修复版确实仍然失败。
+
+VERDICT PASS —— 22 个文件与规格树一一对应、正文 20/22 逐字节保真，
+唯一 2 个文件的 3 处偏离全部是必要且最小的缺陷修复，反证成立；
+唯一遗留问题是规格自称"20 个文件"（实为 22），属规格笔误，非构建缺陷。
+```
+
+---
+
+## 我方对这份验收的复核
+
+| 它的结论 | 我能否复现 | 备注 |
+|---|---|---|
+| FILES 22/22 差集 ∅ | ✅ | 与我的 `ls -R \| grep -c` = 22 一致 |
+| 抽检 6/6 逐字节一致 | ✅ | 与我落盘时逐字写入一致 |
+| 全量 20/22，差异恰为修复点 | ✅ | 与 CHG-001/CHG-005 登记的 2 个文件吻合 |
+| DEFECT-A/B/C 真缺陷 | ✅ | 与 ISS-001/002/003 一致，且它给了**独立**复现 |
+| 修复最小 | ✅ | 与 DEC-001/DEC-003 的「替代方案」分析一致 |
+| COUNTERPROOF | ✅ | 归档文件确实存在（我自己归档的） |
+| 「20 是规格笔误」 | ✅ | 与审计报告 DRIFT 一致 |
+
+**新增信息（我原先没有的）**：规格第五部分 node 版脚本 `[wave,job,status,art,ev]=argv.slice(2)`
+—— 这是「正确变量位是 `$5`」的**第三方旁证**，比我的推理更硬。
+
+**未采信的部分**：它说「沙箱只拷了 acceptance.js 导致 battery-judge.js 缺失」——
+这一条是它自己的沙箱配置问题，**与本次交付物无关**，不计入验收结论。

@@ -1,0 +1,77 @@
+#!/usr/bin/env node
+'use strict';
+/* hook-session-start.js —— SessionStart 探针。
+ *
+ * 为什么要单独一个：PostToolUse 探针要「先编辑一个被监视的文件」才能测，
+ * 而且一旦 `matcher` 与运行环境的 `tool_name` 对不上，它**永远不会响** ——
+ * 而「永远不响」和「根本没有 hook」在账面上长得一模一样。
+ *
+ * `SessionStart` 在任何工具调用**之前**就触发，且不依赖 `tool_name` 匹配。
+ * **它是「hook 到底能不能工作」这个问题的最短路径。**
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 【2026-09-15 第三版 · 结论反转了两次】
+ *
+ * 第一版结论：「配置写进 settings.json 了」→ 误读成「hook 生效了」。
+ *  证伪：那 5 行日志的 payload 恰好等于手喂 JSON 的字节数；真实 Write 之后日志纹丝不动。
+ *
+ * 第二版结论：「配置对了，只是配置改动需新会话生效，**等下一个新会话看 `src=host`**」。
+ *  **这条也是错的。** 两个理由，都是实测：
+ *
+ *  ① 判据本身是假的：我**亲手**伪造出 4 行 `src=host`
+ *     （`payload=67B` 恰好等于只带 `cwd` 的最小 payload；`watched: refs/A-sources.md` 是相对路径，
+ *     而宿主下发的 `file_path` 永远是绝对路径）。**一个我自己就能生产出来的证据，不是证据。**
+ *     第三版为此加了 `probe=` 与 payload 指纹（见 `hook-trace.js`）。
+ *
+ *  ② 更根本的：宿主**从来没加载过**这份配置。读宿主自己的日志（`~/.workbuddy-ai/logs/`）：
+ *     · `[HookExecutor] spawn` 共 **226 次**，**0 次**的 cmd 含 `.check/`；
+ *     · `[HookManager] event=SessionStart` 17 次，每次都只匹配到 tencent-docx / agent-browser
+ *       两个**插件** hook；`event=PostToolUse` **0 次**；
+ *     · 两次宿主进程启动（12:09:47、12:36:08）都在本配置写盘**之后**，都没加载它。
+ *     → 「等新会话」等不到任何东西。
+ *
+ *  原因（官方文档 `cli/hooks.md` 第 17 行原文）：
+ *    「支持 CLI `/hooks` 面板进行图形化配置，**所有外部修改需在面板审核后生效**。」
+ *    手改 `settings.json` 不会生效 —— 这是一道**人工审批闸门**，设计如此。
+ *
+ * ⇒ 现在的准确表述：**「脚本可手动跑通」+「宿主从未加载它」**。
+ *   依赖 hook 的规则**当前只是提示词，不是约束**。
+ *   唯一判据在宿主那一侧：`[HookExecutor] spawn` 里出现 `.check/`
+ *   （`.check/acceptance.js` 的第 [99] 项就是去读宿主日志，而不是读 hook 自己的自述）。
+ *   解法是把 `~/.codebuddy/settings.json` 在 CLI 的 `/hooks` 面板里审核通过 —— **这一步只能由人做**。
+ */
+const fs = require('fs');
+const path = require('path');
+const { trace, classify, readStdin } = require('./hook-trace.js');
+
+const HOME_AI = path.resolve(__dirname, '..');
+const VERIFIED = path.join(HOME_AI, '.check', 'hook-verified');
+
+/* 读掉 stdin（hook 协议会往里写 JSON）。不读的话父进程可能拿到 EPIPE。
+ * **必须在 trace 之前读** —— 来源标记（host / manual）与 payload 指纹只能从 payload 判。 */
+const payload = readStdin();
+const src = classify(payload);
+trace(src, 'session-start', payload);
+
+/* 探针只在**未确认**时注入一行。
+ * 确认之后（创建空文件 `.check/hook-verified`）就只写日志、不再占用常驻上下文 ——
+ * 一个永远在提示的探针，和一条永远在响的警报一样，会被忽略。 */
+if (!fs.existsSync(VERIFIED)) {
+  process.stdout.write(JSON.stringify({
+    continue: true,
+    hookSpecificOutput: {
+      hookEventName: 'SessionStart',
+      additionalContext:
+        'hook 探针：SessionStart 触发了。**但别急着下结论 —— 这一行本身说明不了 hook 生效。**\n' +
+        '· 判据不在 hook 自己的日志里，在**宿主**的日志里：\n' +
+        '  `grep -h "\\[HookExecutor\\] spawn" ~/.workbuddy-ai/logs/*/*.log | grep -c "\\.check/"`\n' +
+        '  返回 ≥1 → 宿主真的加载并调用了它。返回 0 → 它从未被加载，依赖 hook 的规则只是提示词。\n' +
+        '· `.check/hook.log` 里的 `src=host` **不算证据** —— 2026-09-15 亲手伪造过 4 行。\n' +
+        '  只看 `probe=0` 且指纹自洽（`abs=1`、`pl` 不是最小 payload 长度）的行。\n' +
+        '· 若返回 0：原因是官方文档写明的审批闸门 ——\n' +
+        '  「所有外部修改需在 `/hooks` 面板审核后生效」。**这一步只能由人在 CLI 面板里做。**\n' +
+        '跑 `.check/acceptance.js` 看第 [99] 项；确认后创建空文件 `.check/hook-verified` 让本提示停止。',
+    },
+  }));
+}
+process.exit(0);

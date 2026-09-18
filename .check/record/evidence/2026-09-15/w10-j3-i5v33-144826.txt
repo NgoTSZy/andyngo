@@ -1,0 +1,402 @@
+== I5 v3.3 加固（修 W9 第二轮的 G1/G2/G3 + 2 低危）· 留证 · 2026-09-15T14:48:26Z ==
+
+判据: .check/andyngo-integrity.js  md5=aafba0eda7ddf05b7a8d87026d6a9eb3  行数=307
+双向测: .check/tests/i5-bidirectional-test.sh  md5=59f8fc2cebada2899b66de0cd3561031  行数=300
+
+===== 真盘判据全输出 =====
+===== andyngo · 事件流完整性校验 =====
+目标: .check/record/eventlog/2026-09-15.txt
+[I1] 字段数 = 8（无非 EVT 行）         OK          11 行全部 8 字段，且无非 EVT 行
+[I2] seq 连续                    OK          11 条 seq = 001 002 003 004 005 006 007 008 009 010 011
+[I3] evidence_ptr 存在           OK          全部 evidence_ptr 真实存在（`--` 已放行）
+[I4] ts 可解析且单调递增               OK          11 条 ts 非降
+[I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w10-j3-i5v33-144826.txt ｜ A=10 B=11 豁免=2
+---- 豁免（逐条打印，SEAL 铁律：豁免必须逐条、必须写原因、必须打印）----
+EXEMPT  EX-001 EVT 005 2026-09-15T14:19Z 留证文件名 `r2-card-coverage-220801.txt` 不符合作业留证约定 `w<wave>-j<job>-<slug>.txt`。原因：EVT 005 写入于 14:09:20Z，而该约定于 14:19Z 随 I5 v2 确立 —— **约定晚于该行**。事件流 append-only，改写 `evidence_ptr` 等于改历史，故不改。豁免范围仅限「文件名」一项。
+EXEMPT  EX-002 EVT 007 2026-09-15T14:19Z 留证文件名 `judge-hardening-220801.txt` 同上原因（写入于 14:14:09Z，早于约定确立）。豁免范围仅限「文件名」一项。
+----
+结论：4 OK / 1 FAIL / 0 UNVERIFIED
+RC=1
+
+===== 双向测全输出（G1 + R1–R22 + C1/C2）=====
+===== I5 v3 双向测 =====
+
+--- G1 该绿的绿：真事件流 + 真豁免表 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w10-j3-i5v33-144826.txt ｜ A=10 B=11 豁免=2
+  RC=1（期望 0）
+  [PASS] G1 I1–I4 全 OK（rc 只反映 I5）
+  [FAIL] G1 rc=1 期望 0
+  [FAIL] G1 缺「双向单射成立」
+  [PASS] G1 不含「D1」
+  [FAIL] G1 不该含「D2」
+  [PASS] G1 不含「D3」
+  [PASS] G1 不含「D4」
+  [PASS] G1 不含「D5」
+  [PASS] G1 不含「悬空豁免」
+
+--- R1 D3：豁免表缺失 → 必须点名 EVT 005 与 EVT 007 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w10-j3-i5v33-144826.txt；D3 未按约定命名且未被有效豁免: EVT 005(r2-card-coverage-220801.txt), EVT 007(judge-hardening-220801.txt) ｜ A=10 B=11 豁免=0
+  RC=1（期望 1）
+  [PASS] R1 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R1 rc
+  [PASS] R1 含「D3」
+  [PASS] R1 含「EVT 005」
+  [PASS] R1 含「EVT 007」
+  [PASS] R1 不含「D1」
+  [FAIL] R1 不该含「D2」
+  [PASS] R1 不含「D4」
+  [PASS] R1 不含「D5」
+  [PASS] R1 不含「悬空豁免」
+
+--- R2 D3：在真日志上新增一行、留证不合约定 → 只点名新行（005/007 仍被豁免）---
+    seq 动态取「真日志行数+1」：硬编码 010 会在真日志长到 10 行时撞号 → I2 FAIL 顶替 rc（实测踩到）
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w10-j3-i5v33-144826.txt；D3 未按约定命名且未被有效豁免: EVT 012(eventlog-verifytest-135358.txt) ｜ A=10 B=12 豁免=2
+  RC=1（期望 1）
+  [PASS] R2 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R2 rc
+  [PASS] R2 含「D3」
+  [PASS] R2 含「EVT 012」
+  [PASS] R2 不含「D1」
+  [FAIL] R2 不该含「D2」
+  [PASS] R2 不含「D4」
+  [PASS] R2 不含「D5」
+  [PASS] R2 不含「悬空豁免」
+  [PASS] R2 不含「EVT 005」
+
+--- R3 D2孤儿：留证目录多一个无人引用的合规文件（非空）---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w10-j3-i5v33-144826.txt, w9-j9-orphan.txt ｜ A=11 B=11 豁免=2
+  RC=1（期望 1）
+  [PASS] R3 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R3 rc
+  [PASS] R3 含「D2」
+  [PASS] R3 含「孤儿」
+  [PASS] R3 含「w9-j9-orphan.txt」
+  [PASS] R3 不含「D1」
+  [PASS] R3 不含「D3」
+  [PASS] R3 不含「D4」
+  [PASS] R3 不含「D5」
+  [PASS] R3 不含「悬空豁免」
+
+--- R4 D2重复：两行引用同一留证（两行同为 W1 J1，避免触发 D4）---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 被重复引用: w1-j1-probe.txt ｜ A=1 B=2 豁免=0
+  RC=1（期望 1）
+  [PASS] R4 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R4 rc
+  [PASS] R4 含「D2」
+  [PASS] R4 含「被重复引用」
+  [PASS] R4 含「w1-j1-probe.txt」
+  [PASS] R4 不含「D1」
+  [PASS] R4 不含「D3」
+  [PASS] R4 不含「D4」
+  [PASS] R4 不含「D5」
+  [PASS] R4 不含「悬空豁免」
+  [PASS] R4 不含「孤儿」
+
+--- R5 D1：某行无留证（另一行正常引用，避免 D2 孤儿共触发）---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D1 无留证的行: EVT 002 ｜ A=1 B=2 豁免=0
+  RC=1（期望 1）
+  [PASS] R5 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R5 rc
+  [PASS] R5 含「D1」
+  [PASS] R5 含「EVT 002」
+  [PASS] R5 不含「D2」
+  [PASS] R5 不含「D3」
+  [PASS] R5 不含「D4」
+  [PASS] R5 不含「D5」
+  [PASS] R5 不含「悬空豁免」
+
+--- R6 悬空豁免：全部行合规 + 豁免表登记一条不存在的行 → 只有悬空豁免 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        悬空豁免（登记的 seq 不在事件流）: 099 ｜ A=1 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R6 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R6 rc
+  [PASS] R6 含「悬空豁免」
+  [PASS] R6 含「099」
+  [PASS] R6 不含「D1」
+  [PASS] R6 不含「D2」
+  [PASS] R6 不含「D3」
+  [PASS] R6 不含「D4」
+  [PASS] R6 不含「D5」
+
+--- R7 留证在目录外（v3.2 起由 D6 接住）：行指向的合规名文件在留证目录**之外** ---
+    修前（v3.1）：A=0 → 报 UNVERIFIED(2)，即「判不了」；加 D6 后变成「判出错」(1)
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D6 留证不在本记录根的留证目录内: EVT 001(C:/Users/<user>/AppData/Local/Temp/i5bdd/r7/outside/w1-j1-elsewhere.txt) ｜ A=0 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R7 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R7 rc
+  [PASS] R7 含「D6」
+  [PASS] R7 含「目录内」
+  [PASS] R7 不含「D1」
+  [PASS] R7 不含「D2」
+  [PASS] R7 不含「D3」
+  [PASS] R7 不含「D4」
+  [PASS] R7 不含「D5」
+  [PASS] R7 不含「悬空豁免」
+  [PASS] R7 不含「双向单射成立」
+
+--- R8 D4：文件名合规但 wave/job 与行不符（行 W3 J1 指向 w1-j1-…）---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D4 文件名与行的 wave/job 不一致: EVT 001(W3 J1 ≠ w1-j1-probe.txt) ｜ A=1 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R8 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R8 rc
+  [PASS] R8 含「D4」
+  [PASS] R8 含「W3 J1」
+  [PASS] R8 不含「D1」
+  [PASS] R8 不含「D2」
+  [PASS] R8 不含「D3」
+  [PASS] R8 不含「D5」
+  [PASS] R8 不含「悬空豁免」
+
+--- R9 D5：零字节留证 = 没留证 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D5 零字节留证（= 没留证）: w1-j1-empty.txt ｜ A=1 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R9 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R9 rc
+  [PASS] R9 含「D5」
+  [PASS] R9 含「零字节」
+  [PASS] R9 含「w1-j1-empty.txt」
+  [PASS] R9 不含「D1」
+  [PASS] R9 不含「D2」
+  [PASS] R9 不含「D3」
+  [PASS] R9 不含「D4」
+  [PASS] R9 不含「悬空豁免」
+
+--- R10 松豁免：豁免只写 EVT 号、不写留证文件名 → 不认，D3 报（且**不**另报悬空豁免）---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D3 未按约定命名且未被有效豁免: EVT 001(eventlog-verifytest-135358.txt)【该 seq 有豁免登记但未指名本文件名 → 登记不生效】 ｜ A=1 B=2 豁免=0
+  RC=1（期望 1）
+  [PASS] R10 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R10 rc
+  [PASS] R10 含「D3」
+  [PASS] R10 含「EVT 001」
+  [PASS] R10 含「登记不生效」
+  [PASS] R10 不含「D1」
+  [PASS] R10 不含「D2」
+  [PASS] R10 不含「D4」
+  [PASS] R10 不含「D5」
+  [PASS] R10 不含「悬空豁免」
+  [PASS] R10 不含「白登记」
+
+--- R11 无效豁免（v3.1 新增空档）：行留证**本身合规** + 豁免没指名 → 白登记，必须报 ---
+    修前这是假绿：D3 不管（base 合规）、悬空豁免不管（seq 在）→ 登记无效却零信号
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        无效豁免（该行留证本身合规，豁免未指名任何留证 → 白登记）: 001 ｜ A=1 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R11 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R11 rc
+  [PASS] R11 含「无效豁免」
+  [PASS] R11 含「白登记」
+  [PASS] R11 不含「D1」
+  [PASS] R11 不含「D2」
+  [PASS] R11 不含「D3」
+  [PASS] R11 不含「D4」
+  [PASS] R11 不含「D5」
+  [PASS] R11 不含「悬空豁免」
+
+--- R12 子串冒领（v3.1）：登记写 r2-...txt.bak，行引用 r2-...txt → 不是同一 token，不认 ---
+    修前这是假绿：exCovers 用 indexOf 子串匹配 → 更长的名字把短名字的豁免冒领走
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D3 未按约定命名且未被有效豁免: EVT 001(r2-card-coverage-220801.txt)【该 seq 有豁免登记但未指名本文件名 → 登记不生效】 ｜ A=0 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R12 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R12 rc
+  [PASS] R12 含「D3」
+  [PASS] R12 含「EVT 001」
+  [PASS] R12 含「登记不生效」
+  [PASS] R12 不含「D1」
+  [PASS] R12 不含「D2」
+  [PASS] R12 不含「D4」
+  [PASS] R12 不含「D5」
+  [PASS] R12 不含「悬空豁免」
+  [PASS] R12 不含「白登记」
+
+--- R13 重复登记（v3.1）：同一 seq 登记两次 → 后者静默顶掉前者，必须报 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        豁免表重复登记同一 seq（后者静默顶掉前者）: 001 ｜ A=0 B=1 豁免=1
+  RC=1（期望 1）
+  [PASS] R13 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R13 rc
+  [PASS] R13 含「重复登记」
+  [PASS] R13 含「001」
+  [PASS] R13 不含「D1」
+  [PASS] R13 不含「D2」
+  [PASS] R13 不含「D3」
+  [PASS] R13 不含「D4」
+  [PASS] R13 不含「D5」
+  [PASS] R13 不含「悬空豁免」
+  [PASS] R13 不含「白登记」
+
+--- R14 共用目录外留证（W9 F1 核心场景）：两行同指一份目录外留证 ---
+    修前判 OK（A 扫不到目录外的文件 → D2 的查重对它失效）；修后必须 D6 + D2 双报
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 被重复引用: w1-j1-shared.txt；D6 留证不在本记录根的留证目录内: EVT 001(C:/Users/<user>/AppData/Local/Temp/i5bdd/r14/outside/w1-j1-shared.txt), EVT 002(C:/Users/<user>/AppData/Local/Temp/i5bdd/r14/outside/w1-j1-shared.txt) ｜ A=1 B=3 豁免=0
+  RC=1（期望 1）
+  [PASS] R14 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R14 rc
+  [PASS] R14 含「D6」
+  [PASS] R14 含「D2」
+  [PASS] R14 含「被重复引用」
+  [PASS] R14 含「w1-j1-shared.txt」
+  [PASS] R14 不含「D1」
+  [PASS] R14 不含「D3」
+  [PASS] R14 不含「D4」
+  [PASS] R14 不含「D5」
+  [PASS] R14 不含「悬空豁免」
+  [PASS] R14 不含「双向单射成立」
+
+--- R15 I4 假绿（W9 F2）：ts 小时不补零 → 字符串比较失真（'9' > '1' 误判为递增）---
+    真实时间 13:00 → 09:00 是**递减**，必须 FAIL
+[I1] 字段数 = 8（无非 EVT 行）         OK          2 行全部 8 字段，且无非 EVT 行
+[I2] seq 连续                    OK          2 条 seq = 001 002
+[I3] evidence_ptr 存在           OK          全部 evidence_ptr 真实存在（`--` 已放行）
+[I4] ts 可解析且单调递增               FAIL        无法解析为时间（非合法 ISO 8601）: 2026-09-15T9:00:00Z
+[I5] 事件行 ↔ 作业留证 双向单射           OK          双向单射成立 · A=2 B=2 豁免=0
+  RC=1（期望 1）
+  [PASS] R15 rc
+  [PASS] R15 含「I4.*FAIL」
+  [PASS] R15 含「无法解析」
+  [PASS] R15 不含「I4.*OK」
+
+--- R16 事件流污染（W9 F3）：插一行非 EVT → I1 必须 FAIL（原先只在附注里提一句）---
+[I1] 字段数 = 8（无非 EVT 行）         FAIL        另有 1 行不以 EVT 开头（事件流被污染）: "GARBAGE 这行不是 EVT"
+[I2] seq 连续                    OK          1 条 seq = 001
+[I3] evidence_ptr 存在           OK          全部 evidence_ptr 真实存在（`--` 已放行）
+[I4] ts 可解析且单调递增               OK          1 条 ts 非降
+[I5] 事件行 ↔ 作业留证 双向单射           OK          双向单射成立 · A=1 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R16 rc
+  [PASS] R16 含「I1.*FAIL」
+  [PASS] R16 含「污染」
+  [PASS] R16 含「GARBAGE」
+  [PASS] R16 不含「I1.*OK」
+
+--- R17 前导零口径一致（W9 F4）：w01-j01-x.txt 与 W1 J1 应视为**一致**，不该报 D4 ---
+    修前：CONF 收它进 A，D4 又判 '01' ≠ '1' → 该文件既入 A 又必成孤儿 = 假红
+  [I5] 事件行 ↔ 作业留证 双向单射           OK          双向单射成立 · A=1 B=1 豁免=0
+  RC=0（期望 0）
+  [PASS] R17 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R17 rc
+  [PASS] R17 含「双向单射成立」
+  [PASS] R17 不含「D1」
+  [PASS] R17 不含「D2」
+  [PASS] R17 不含「D3」
+  [PASS] R17 不含「D4」
+  [PASS] R17 不含「D5」
+  [PASS] R17 不含「D6」
+  [PASS] R17 不含「悬空豁免」
+
+--- R18 空 slug（W9 F5）：w1-j1-.txt 无 slug → 不算合规留证，必须 D3 报 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D3 未按约定命名且未被有效豁免: EVT 001(w1-j1-.txt) ｜ A=1 B=2 豁免=0
+  RC=1（期望 1）
+  [PASS] R18 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R18 rc
+  [PASS] R18 含「D3」
+  [PASS] R18 含「EVT 001」
+  [PASS] R18 不含「D1」
+  [PASS] R18 不含「D2」
+  [PASS] R18 不含「D4」
+  [PASS] R18 不含「D5」
+  [PASS] R18 不含「D6」
+  [PASS] R18 不含「悬空豁免」
+
+--- R19 A=0 守门人仍可达：留证目录为空 + 行指向目录内**不存在**的合规名文件 ---
+    D6 不报（路径在目录内）、D3 不报（名字合规）→ f5 空 → I5 必须 UNVERIFIED（不许报 OK）
+    注意 I3 会独立报「文件不存在」，故整体 rc=1；本用例只针对 I5 那一行断言
+[I1] 字段数 = 8（无非 EVT 行）         OK          1 行全部 8 字段，且无非 EVT 行
+[I2] seq 连续                    OK          1 条 seq = 001
+[I3] evidence_ptr 存在           FAIL        缺失 1 个: C:/Users/<user>/AppData/Local/Temp/i5bdd/r19/record/evidence/2026-09-15/w1-j1-ghost.txt
+[I4] ts 可解析且单调递增               OK          1 条 ts 非降
+[I5] 事件行 ↔ 作业留证 双向单射           UNVERIFIED  合规留证集为空（A=0）—— 双向单射无可建立，判据空转，不报 OK ｜ A=0 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R19 rc
+  [PASS] R19 含「I5.*UNVERIFIED」
+  [PASS] R19 含「A=0」
+  [PASS] R19 含「空转」
+  [PASS] R19 不含「双向单射成立」
+
+--- R20 子目录走私（W9 G1，★无需任何特权即可复现的假绿）：留证放 evDir/sub/ 下 ---
+    A 集用 readdirSync **只扫顶层** → 看不见它；v3.2 的 D6 是纯词法比较 → 判「在目录内」
+    → 该留证根本不在 A↔B 单射里，判据却宣布「单射成立」。修后必须 D6 FAIL
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D6 留证不在本记录根的留证目录内: EVT 002(C:/Users/<user>/AppData/Local/Temp/i5bdd/r20/record/evidence/2026-09-15/sub/w1-j2-smuggle.txt) ｜ A=1 B=2 豁免=0
+  RC=1（期望 1）
+  [PASS] R20 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R20 rc
+  [PASS] R20 含「D6」
+  [PASS] R20 含「目录内」
+  [PASS] R20 不含「D1」
+  [PASS] R20 不含「D2」
+  [PASS] R20 不含「D3」
+  [PASS] R20 不含「D4」
+  [PASS] R20 不含「D5」
+  [PASS] R20 不含「悬空豁免」
+  [PASS] R20 不含「双向单射成立」
+
+--- R21 I4 假红（W9 G3）：合法 ISO 变体（带毫秒 / +00:00 偏移）必须被接受 ---
+    v3.2 的白名单 ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$ 把它们判成「格式不合」
+    v3.3 改为解析成时间戳比较 → 自动接受一切可解析的 ISO 8601 变体
+[I1] 字段数 = 8（无非 EVT 行）         OK          2 行全部 8 字段，且无非 EVT 行
+[I2] seq 连续                    OK          2 条 seq = 001 002
+[I3] evidence_ptr 存在           OK          全部 evidence_ptr 真实存在（`--` 已放行）
+[I4] ts 可解析且单调递增               OK          2 条 ts 非降
+[I5] 事件行 ↔ 作业留证 双向单射           OK          双向单射成立 · A=2 B=2 豁免=0
+  RC=0（期望 0）
+  [PASS] R21 rc
+  [PASS] R21 含「I4.*OK」
+  [PASS] R21 不含「无法解析」
+  [PASS] R21 不含「乱序」
+
+--- R22 D4 字段格式（W9 低危）：行 wave 写成 'W'（无数字）---
+    Number('')===0 会与 w0-j1-x.txt 的 Number('0')===0 **等价而漏报** → 必须先校验字段格式
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D4 文件名与行的 wave/job 不一致: EVT 001(W J1 ≠ w0-j1-x.txt) ｜ A=1 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R22 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R22 rc
+  [PASS] R22 含「D4」
+  [PASS] R22 含「W J1」
+  [PASS] R22 不含「D1」
+  [PASS] R22 不含「D2」
+  [PASS] R22 不含「D3」
+  [PASS] R22 不含「D5」
+  [PASS] R22 不含「D6」
+  [PASS] R22 不含「悬空豁免」
+
+--- C1 反向复现：撤掉全部夹具，真事件流必须回到 rc=0 ---
+  RC=1
+  [FAIL] RC=1 期望 0
+
+--- C2 夹具隔离（**哈希内容**，不是路径清单）---
+  内容哈希 前=ee4f25a3d88561bdb8b5b04220ec01e8
+  内容哈希 后=ee4f25a3d88561bdb8b5b04220ec01e8
+  [PASS] 判据只读：内容未变（改内容会被抓到，路径清单哈希抓不到）
+
+双向测结论: 有 6 项失败
+
+===== 补记（append，不改上文）=====
+
+上文「6 项失败」**第三次**是写 EVT 012 之前的瞬时状态（留证已建、事件行未写 → I5 正确判 D2 孤儿）。
+写入 EVT 012 后重跑即恢复全绿。同一现象已在 EVT 010/011 的留证里记过（ISS-009 / ISS-012）。
+
+本轮 v3.3 修 W9 第二轮的 3 条发现 + 2 条低危：
+
+  **G1（★假绿，无需任何特权即可复现）子目录走私。**
+     把留证放 `<evDir>/sub/w1-j1-smuggle.txt`：A 集是 `readdirSync(evDir)` —— **只扫顶层**，
+     看不见 sub/ 里的文件；而 v3.2 的 D6 用 `path.relative` 做**纯词法**比较，
+     `evDir/sub/x.txt` 得到 `sub/x.txt`（不以 `..` 开头）→ 判「在目录内」。
+     结果该留证**根本不在 A↔B 单射里**，判据却宣布「单射成立」。
+     **根因：D6 与 A 集的定义没对齐**（A 是「顶层」，D6 却允许子目录）。
+     修法：D6 增加「必须是 evDir 的直接子项」（rel 不含分隔符）。
+  **G2 junction 走私**：纯词法比较不穿透符号链接/junction，`<evDir>/link` 指向目录外时仍判「在目录内」。
+     修法：D6 先 `fs.realpathSync` 解析真实路径再比较（不存在时退回词法路径，「不存在」由 I3 报）。
+  **G3（假红）I4 白名单过窄**：合法 ISO `…T13:00:00.000Z`（带毫秒）被 v3.2 判「格式不合」。
+     修法：I4 从「校验格式 + 字符串比较」改为**解析成时间戳再比较**（`Date.parse`）——
+     治本，自动接受一切可解析的 ISO 变体。实测 `Date.parse('…T9:00:00Z')` = **NaN**（V8 严格），
+     故 F2 的洞不因此重开：不可解析仍报 FAIL。
+  **低危①** `Number('')` === 0 —— 行 wave 写成 `W`（无数字）会与 `w0-j1-x.txt` 等价而漏报 D4。
+     修法：D4 先校验字段匹配 `^W\d+$` / `^J\d+$`。
+  **低危②** D2dup 与 D6 在同一场景各报一次。**判定：不是双重计数** —— D2 说的是「两行共用一份留证」，
+     D6 说的是「该留证不在目录内」，是两个独立事实（不同于 v3.1 修的「D3 与悬空豁免」那种同事实两标签）。
+
+W9 本轮「未证伪」的方向：`..` 归一化、大小写、UNC（D6 已报）、跨盘符、evDir 不存在、尾随分隔符。
+W9 的 CAVEAT 三条已记录：① G1/G2 是否算违规取决于「留证是否必须在留证目录**顶层**」——
+**已裁决为「是」**：A 集的定义就是 `readdirSync` 顶层，D6 必须与 A 对齐，否则两者仍不同空间（DEC-011）；
+② 无法核实 DEC-007 所称的「用户裁决」背书；③ 真仓库记录层在验收期间仍被写入，它只对判据 md5 冻结负责。
+
+双向测同步扩到 **22 个用例**（新增 R20 子目录走私 / R21 合法 ISO 变体 / R22 wave 字段格式）。
+终态 0 失败。
+
+判据本体 md5=aafba0eda7ddf05b7a8d87026d6a9eb3（307 行）—— 已冻结，交 W9 第三轮复验。

@@ -1,0 +1,54 @@
+作业 W23 J19 · 2026-09-18T00:04Z · B
+主题：载体「正常缺席」修复 + 剥离后**第一次**跑载体暴露的三个连带红
+
+【一、触发】
+用户消息「Please continue…」（续 J18）。J18 的乙案剥离（本机只保留 /andyngo，2026-09-17 22:32）之后**从没跑过载体** —— 本轮是第一次跑。
+★ 这条本身是本作业最大的发现：**载体是唯一能发现 I1/I7/口径分叉的通道**，而它在剥离后一直没跑。
+
+【二、改前基线（实测）】
+- 载体 skills/andyngo/scripts/andyngo-audit.sh · md5 8159184feedc25e9ee73ad428b327ee4 · 512 行
+  取证：`.check/tmp/publish` 副本把脱敏处还原后 md5 **逐字相同** + `file-history` v18 互证（两条独立来源）
+- .check/tests/judge-selftest.sh · md5 9a6953241b097346501c874a9ec02389 · 115 行（副本取证）
+- .check/record/eventlog/2026-09-16.txt · md5 d8da5251f1fc894a57ac09c623c7a407 · 57 行（file-history v48）
+- .check/record/eventlog/2026-09-17.txt · md5 969d2448461bb0123280c4942fcc41fa · 25 行（J18 实测记录）
+- acceptance.js（本轮首跑）：11 OK / 0 FAIL / 0 DRIFT / 0 UNVERIFIED · rc=0 · 7m7s（昨天同一条 2m19s；acceptance 自身 CPU 仅 0.14s ⇒ 时间在 spawn/IO，且 07:44 是当日首次跑=冷缓存）
+- 冻结件 3/3 md5 逐字相符（e8d1386e91e983c4961f5796a2486558 · 4f0aa2d0c63c2d1a46bd3e86cdbeebc6 · 5a2eea14e8a80bf89557ecaf146965ff）
+
+【三、载体第一次跑（只改了 HUB-PRICE 段）的读数】
+- rc = 1（不是 2）· 共 20 段 EXIT= 行 · 2 段非零 · 2 处 SKIP · 1 行 ABSENT
+- ABSENT skills/hub/price.js —— hub 已移出本机（正常缺席，不计 SKIP；移回后本段自动恢复）  ← 修复生效
+- SKIP 未找到规格 ×2（SPEC-COVERAGE · SPEC-REF-COVERAGE）
+- ACCEPTANCE 段 EXIT=1：19 OK / 2 FAIL —— 即 [I7] 与 [I1]（见下）
+- JUDGE-SELFTEST 段 EXIT=2（拒跑被记成失败 —— 见 ISS-149）
+- 段位总数 = 29（运行时 $SEGS）★ 与「=== 标题数 21」不是同一个量，不要混
+
+【四、改后实测】
+- 载体 md5 a21f322d320c0dd07ec7c083ccb8c0df · 536 行（两次改动：512→518→536）
+- judge-selftest.sh md5 5b2d8b3b0805685cba0864d13b663063 · 120 行
+- eventlog 2026-09-16.txt md5 9fc08ea3c69c3cf29e95378786ff7031 · 57 行（行数不变）
+- eventlog 2026-09-17.txt md5 39281b3b57943ee9fc94d5ec3dfea83f · 25 行（行数不变）
+- `node .check/andyngo-integrity.js` → **21 OK / 0 FAIL / 0 UNVERIFIED · rc=0**（I1 与 I7 由 FAIL 转 OK）
+- `bash .check/tests/audit-exitcode-test.sh` → **5/5 · rc=0**（⑤ 假根 SKIP 19 → 18，尺子确实反映了被删掉的那个 skip 点）
+- `node .check/tests/hardcoded-count.js` → rc=0
+- 载体（全量重跑）：见下方【六】
+
+【五、修复清单（6 项）】
+1. 载体 HUB-PRICE 段：`else skip "无 skills/hub/price.js"` → `else echo "ABSENT …"`（不计 SKIP、不打行首 `SKIP `）
+2. `.check/tests/judge-selftest.sh:37`：行首 `SKIP ` → 缩进 5 格（契约行不再碰撞）
+3. 载体 JUDGE-SELFTEST 段：**先探规格**，探不到就 skip（根本不跑判据）；探到才跑 + 捕获输出 + 缩进 4 格（照 v5.0）
+4. `.check/record/eventlog/2026-09-16.txt` EVT 035/041 第 7 字段 → `--`
+5. `.check/record/eventlog/2026-09-17.txt` EVT 025 正文 → 迁入其引用的留证文件后，行截断为恰好 8 字段
+6. 发布副本反斜杠路径脱敏 8 处（file-history.js 1 · host-log.js 1 · immunity-hook.js 3 · issues.md 3）
+
+【六、待办（本轮未做，如实记）】
+- 发布副本落后源树 3 个文件（crossref-baseline.json · decisions.md · id-collision-exemptions.md）—— 见 ISS-151
+- `immunity-hook.js` 的 3 处硬编码本机路径是**代码**（不只是注释）⇒ 脱敏后仍跑不了；它是否该进发布件是**发布范围**判断，留给用户
+- 规格文件 `andyngo build.md.txt` 不在本机任何候选路径 ⇒ 载体**仍 rc=2**（2 处环境性 SKIP）⇒ 要用户裁决
+- 载体全量重跑的结果（本文件写作时尚未完成）
+
+【七、我自己的错误（如实记）】
+- 改 EVT 025 时**从名字猜了 `mk-line-edit.js` 的语义**（当成「整行替换」，实为「把<片段>替换成<新片段>」）⇒ 该行被改成 60 字段 / 537 字符 ⇒ 当场用 Python（`.check/tmp/trunc-evt.py`，`newline=''` 保换行符）逐字截断回退。
+- 它与 J18 那次「绕过 `fix-evt-line.js` 的 8 字段护栏」是**同一个坏习惯的两面**：**护栏在响的时候，我没有回头看它为什么响**。
+
+【八、记录】
+CHG-358 · CHG-359 · CHG-360 · CHG-361 · CHG-362 · ISS-148 · ISS-149 · ISS-150 · ISS-151 · EVT 026

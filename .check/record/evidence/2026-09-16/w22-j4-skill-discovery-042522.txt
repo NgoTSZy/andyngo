@@ -1,0 +1,185 @@
+W22 J4 · 独立核实：skill 发现链路 + 「悬空引用」口径更正
+留证时间：2026-09-16T04:25:22Z
+作业：核实 W22 J3 之后的现场数字；推翻一个继承来的错误结论；查证 skill 发现链路。
+
+================================================================
+一 · 起点
+================================================================
+本轮不预设结论，只做三件事：
+  (1) 把摘要继承来的每个数字**重新实测**一遍，不抄；
+  (2) 核实「MEMORY.md 的 4 条悬空 skills/ 引用待修」这个未结项；
+  (3) 查证 `skills/` 下 14 个目录缺 `SKILL.md` 是否构成可发现性缺口。
+
+================================================================
+二 · 实测数字（全部现场测出，未抄摘要）
+================================================================
+验收主检查 `node .check/acceptance.js`（耗时 9m38s）：
+    12 OK / 0 FAIL / 0 DRIFT / 0 UNVERIFIED · REAL_EXIT_ACC=0
+  [ 1] 主检查 PASS 8 / FAIL 0 / UNVERIFIED 0
+  [ 2] 内置变异 96/96
+  [ 3] mutations-independent.js 命中 13 / 逃逸 1 / 假红 0 / 抛错 0 / 锚点失配 0（共 14）
+  [ 4] mutations-fourth.js      命中 23 / 逃逸 3 / 假红 1 / 抛错 0 / 锚点失配 0（共 27）
+  [ 5] mutations-fourth2.js     命中 18 / 逃逸 1 / 假红 0 / 抛错 0 / 锚点失配 0（共 19）
+  [ 6] mutations-thirdparty2.js 命中 29 / 逃逸 9 / 假红 0 / 抛错 0 / 锚点失配 3（已登记 N36,N38,N40）（共 41）
+  [ 7] selftest-host-log.js     55/55
+  [ 8] battery-judge.js         10/10
+  [ 9] selftest-c5-count.js     1/1
+  [10] hub 标价一致性            登记 21 本 · 磁盘 22 本 · 数值不一致 0 · 缺登记 0
+  [98] automation 上次运行有产出  OK · start 1 条 / 终态 1 条 · 账本 70 行
+       （最近 2026-09-16T04:18:05.350Z exit=0 ok=12 —— **就是本次实测那一轮**）
+  [99] hook 被宿主调用          OK · spawn 319 次 · 指向 .check/ **289 次** · 无异常退出
+       · 自述 758 行（hit×1 ok×757；rc≠0 1 次）
+
+完整性 `node .check/andyngo-integrity.js`：**14 OK / 0 FAIL · RC=0**
+  I5：09-15 双向单射 OK（A=10 B=12 豁免=2）· 09-16 双向单射 OK（A=21 B=21 豁免=0）
+  （过程中曾因重复 EVT-022 变 13 OK / 1 FAIL，EVT-022 移出后复原 —— 见 W22 J3 留证）
+
+取号器 `node .check/record/newid.js --check`：**RC=0**
+  未登记撞号 0 · 已登记历史撞号 5 · 悬空豁免 0 · 豁免表 5 条
+
+记录层（**口径：行数 ≠ 条目数**）：
+  issues.md    行数 95 · **条目数 84** · 正文逐字重复 **7 对**
+  decisions.md 行数 44 · **条目数 35** · 正文逐字重复 **1 对**
+  changes.md   行数 105 · **条目数 97** · 正文逐字重复 **2 对**
+  eventlog/2026-09-16.txt 21 条 · 正文逐字重复 **0**
+  → 与 W22 J3 终态**逐项吻合**；幂等机制生效，**未新增任何重复对**。
+
+锁与进程：残留 `*.lock` **0 个** · `/usr/bin/bash` 进程数 **3**（无递归）
+冻结件三件 md5 **零改动**：
+  andyngo-integrity.js      e8d1386e91e983c4961f5796a2486558  ✓
+  check-protocol.js         4f0aa2d0c63c2d1a46bd3e86cdbeebc6  ✓
+  i5-bidirectional-test.sh   5a2eea14e8a80bf89557ecaf146965ff  ✓
+
+================================================================
+三 · 更正一：「4 条悬空引用」是**误判**，活指针悬空 = 0
+================================================================
+继承来的结论：「MEMORY.md 有 4 条悬空 `skills/…` 引用待修」。
+实测：正则扫出的 15 条出现里，4 条匹配不上文件。**逐条读原文后，4 条全部不是活指针。**
+
+  ① `MEMORY.md:19`  `skills/hooks`（`refs/A-sources.md` 里一处历史错字）。
+     → 该行**本身就在说「这是历史错字」**，是**对错字的记录**，不是「去读它」的指令。
+  ② `refs/A-sources.md:33`  `skills/hooks/工作流精选（组合首选入口）`
+     → 该行是**外部资源表第 8 项**（`github.com/hesreallyhim/awesome-claude-code`），
+       指的是**那个 GitHub 仓库里的目录**，不是本机 `~/.workbuddy-ai/skills/hooks`。
+  ③ `refs/E-decisions.md:314`  「引用了不存在的路径：~/.workbuddy-ai/skills/hooks」
+     → 该行**本身就在记录「这个路径不存在」**。
+  ④ `MEMORY.md:18`  `skills/constraint-mode/SKILL.md`（Wave 3 已改名 `MODULE.md`）
+     → 该行**本身就在说明「那是记录改名事件的引文」**。
+
+**`MEMORY.md:17-19` 原文早已把这两处判定为「历史引文（不是活指针）」—— 那个判断是对的。**
+真正指向 `MODULE.md` 的活指针实测**全部存在**：
+  `MODE.md:26` · `MEMORY.md:13` · `MEMORY.md:139` · `refs/C-memory.md:63` ·
+  `refs/C-memory.md:86` · `refs/D-retro.md:225` · `refs/F-execution.md:26` → 均指向 `skills/constraint-mode/MODULE.md`（存在）
+
+**根因（口径缺陷）：** 我的检测正则 `skills/[A-Za-z0-9_./-]+` 抓的是**任何出现**，
+分不清「**引用**（去读它）」与「**提及**（在讨论它不存在）」。二者在文本层面**同形**。
+这是本项目「**判据认不出形状**」的**第五次**同族踩坑
+（前四次：`.check/` 分隔符、hook 自述文件不存在、`[99]` 只看 spawn 行不看下一行、
+`unchecked>0` 让「有产出」冒充「检查了」）。
+→ **「引用总数 15 · 悬空 4」这个数字本身是假红；真实的活指针悬空数是 0。**
+
+================================================================
+四 · 发现二：14 个 skill 只有 `MODULE.md`，不在 `<available_skills>` 里
+================================================================
+实测 `skills/` = **22 个目录 + 1 个 json**（`_bm_skillid_migration.json`）· **72 个文件**。
+
+**有 `SKILL.md`（8 个）**：andyngo · attribution-probe · dsh-profile-reset · hub ·
+  national-fund-architect · trading-venue-preflight · windows-kernel-dump-triage ·
+  wsl-to-windows-capability-probe
+**只有 `MODULE.md`（14 个）**：constraint-mode · dsh-provider-e2e-verify · dsh-startup-repair ·
+  failure-immunity-layer · measurement-self-falsification · national-fund-dispatch ·
+  national-fund-ledger · nautilus-trader-deploy · powershell-windows-command-orchestration ·
+  probe-layer-byte-verification · structural-edit-regression · tamper-evident-change-ledger ·
+  vanilla-js-no-browser-verification · windows-gui-automation-verify
+
+**交叉验证（这是关键证据）**：本会话系统提示的 `<available_skills>` 里，
+用户级 skill 恰好列出 **8 个** —— **正好等于有 `SKILL.md` 的那 8 个**。
+→ **产品按 `skills/<名>/SKILL.md` 发现技能，这一点由「8 = 8」直接证实。**
+
+================================================================
+五 · 反证：这**不是缺口**，是分层设计（差点报成假缺口）
+================================================================
+继续查下去，三条证据把它推翻：
+
+  (1) `skills/hub/price.js:62-67` —— 主文件查找是
+      `['SKILL.md','MODULE.md'].map(...).find(fs.existsSync)`：**优先 SKILL.md，找不到才用 MODULE.md**。
+      所以「磁盘 22 本」= 22 个**有主文件**的目录，不是「22 个可注入的」。
+  (2) 同文件 `:113` —— `if (name === 'hub') continue;`：hub 是**路由表本身**，不登记在自己表里。
+      于是 22 − 1(hub) = 21 = `want.size` → **缺登记 0 是正确口径**，
+      「登记 21 · 磁盘 22」**不是缺陷**，我一开始把它当成疑点了。
+  (3) `routes.md` 实测**已登记全部 21 本**（缺登记 0）→ 那 14 本**都有发现入口**。
+
+**设计是通的**：`hub` 自己有 `SKILL.md` → 其 description 注入 → agent 知道有「路由表」→
+读 `hub/routes.md` → 找到那 14 本。**薄注入 + 按需发现**，是有意的常驻成本优化。
+
+**并且触发词覆盖了那 14 本的领域**（对照 `hub/SKILL.md` 的 description）：
+  dsh→dsh-provider-e2e-verify/dsh-startup-repair · 自愈/防复发→failure-immunity-layer ·
+  证伪→measurement-self-falsification · 主权阿尔法→national-fund-dispatch/-ledger ·
+  Nautilus→nautilus-trader-deploy · Windows→powershell-windows-command-orchestration/windows-gui-automation-verify ·
+  账本→tamper-evident-change-ledger · 前端无浏览器验证→vanilla-js-no-browser-verification ·
+  约束模式→constraint-mode
+
+**判定：不构成缺口。** 我最初「14 个 skill 不可发现」的写法**强度超过了证据** —— 已撤回。
+
+================================================================
+六 · 真正未被覆盖的边界（这才是要立的）
+================================================================
+链条末端**没有任何判据覆盖**：
+  `description` 注入 → agent 决定读 hub → agent 决定读 `routes.md` → agent 决定读某一本
+这**四个决定全在 agent 侧**，`acceptance.js` / `andyngo-integrity.js` / `price.js --check`
+**都只覆盖「表 ↔ 磁盘一致」，不覆盖「agent 是否真去读了」**。
+即：**表再准，也可能没人读。**
+
+两处**具体残余**（可核查，本轮**未验证**）：
+  (a) 有 2 本的领域在 hub 触发词里**没有明确对应词**：
+      `probe-layer-byte-verification`、`structural-edit-regression`。
+      遇到这两类任务时，agent 是否会想到「去 hub」—— **未验证**。
+  (b) `hub/SKILL.md` 的 description 只说「本 skill 只给路由表与 token 标价，不加载正文」，
+      **未列出表内任何一本的名字**。所以「知道有路由表」与「知道表里有什么」是两件事。
+
+**活证据（本会话自身）**：我在本会话里是靠 `ls skills/` 才发现那 14 本的，
+**不是**靠读 `hub/routes.md`。即：一个真实的 agent 会话，在需要 skill 时，
+**没有走那条设计好的链路**。这条证据只覆盖「我这一次」，不外推到「链路口径一定失效」。
+
+================================================================
+七 · 发现三：automation 提示词 §0.5 的**物理位置**仍在 §0.3 之后
+================================================================
+W22 J3 把锁自测从 §一.6 提到 §0.5，并在标题里写明「**位置必须在 §0.3 取锁之前**」。
+但实测 view 出来的字段顺序是：
+  §0.1 → §0.2 → §0.2.1 → §0.2.2 → §0.2.3 → **§0.3（取锁）** → §0.4 → **§0.5（锁自测）**
+即：**规则文字说对了，物理顺序没改。** 一个顺序执行的 agent 走到 §0.3 时锁已取，
+到 §0.5 再跑自测 → **必然拒跑 rc=2**（与 ISS-073 同形，只是强度从「不可能」降到
+「依赖 agent 读完整节再回头」——**那仍是纪律，不是机制**）。
+本轮**只发现，未改**（改 automation 提示词属改行为规范，且 ISS-073 的修法**下一轮才验得到**，
+现在改会把两次改动混在一轮，无法归因）。
+
+================================================================
+八 · 我自己犯的错（留档，不删）
+================================================================
+**为了 grep `[10]` 那一行，我又把 `acceptance.js` 跑了一遍。**
+  代价：白耗 9m38s；并且会**再往 automation 账本写一条运行记录**（`[98]` 下次会看到 2 条）。
+  这正是本项目一直在记的「**一条命令被执行两次**」——这次不是环境造成的，**是我主动造成的**。
+  发现后已终止（PID 12584 + 子 20796，`taskkill /F /T`）。
+  **正确做法**：`[10]` 的数字来自 `node skills/hub/price.js --check`，
+  读它自己的输出即可，**不必重跑整个验收**。
+  **教训：验收的单项数字要能从「被它调用的那个脚本」单独取，不要为了看一行而重跑全量。**
+
+================================================================
+九 · 未结边界 + 本轮结论
+================================================================
+**未结（如实列出，不粉饰）：**
+  1. §六 那条链路（description → hub → routes.md → 具体本）**无判据覆盖** → UNVERIFIED；
+     其中 (a) 两本无对应触发词、(b) hub description 未列出表内名字 —— 均**未验证**。
+  2. ISS-073 的提示词修法**下一轮才验得到**；且 §七 发现其物理顺序**仍未修**。
+  3. 锁自测**未接入** `acceptance.js`（实测该文件里无 `write-lock` 字样）→ 回归里永远缺这一项。
+  4. `[99]` 的 319/289/758 是**当日滚动窗口**的数字，**每次都会变，不要抄**。
+  5. `[10]` 的「登记 21 · 磁盘 22」口径正确，但**展示层未说明差在 hub** —— 下次看的人会再疑一次。
+
+**三句结论：**
+  1. **「文本里出现某路径」不等于「指向某路径的活指针」。** 我的悬空检测把「讨论某路径不存在」
+     的文字判成了「该路径悬空」—— **判据认不出形状，第五次**。真实活指针悬空数 = **0**。
+  2. **差点报出一个假缺口。** 「14 个 skill 不在 `<available_skills>`」是真的，
+     但**「所以它们不可发现」是假的** —— 它们全部已在 `routes.md` 登记，`hub` 就是它们的入口。
+     **事实成立 ≠ 推论成立**；这次的推论强度超过了证据。
+  3. **真问题是链条末端没有判据**：表准不准有人管（`price.js --check`），
+     **有没有人去读表没人管**。而本会话就是活证据 —— 我走的是 `ls`，不是那条链路。

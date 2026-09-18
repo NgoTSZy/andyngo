@@ -1,0 +1,186 @@
+#!/usr/bin/env node
+/* probe-record-shape.js —— 记录层「逐行形状」的**判据 + 双向测**（ISS-050）
+ *
+ * 规则实现在 `.check/record-shape.js`（**唯一一份**），本文件只做三件事：
+ *   `--scan`   判定真记录（判据；有命中 exit 1）
+ *   `--inject` 双向测：畸形行**必须**被抓、合法行**不得**被抓、已知边界**确认抓不住**
+ *   `--holes`  被否决的那族规则单独打印（附量化误伤数）—— 留给「想顺手加空括号检查」的人
+ *
+ * ---- 为什么判据在这里，而不在 `andyngo-integrity.js`（I8/I9/I10）---------------
+ * 第一版我确实加进了 `andyngo-integrity.js`，跑出 `17 OK / 0 FAIL`，**然后回退了**。
+ * 理由：该文件当时是 **W9 第六轮独立复验的冻结件**（`e8d1386e…` · 537 行 · 结论未回）。
+ * 在复验进行中改被测件，会让复验结论**落在已经不存在的版本上** ——
+ * 本仓库**已经吃过一次**这个亏：CHG-061 记着「双向测第 1 次**因被测件被第三方改写而整次作废**」。
+ * **不改冻结件不是洁癖，是因为改了以后「验证过了」这句话就没有指称对象了。**
+ * 回退后实测 md5 复原为 `e8d1386e91e983c4961f5796a2486558`（逐字节一致），复验继续有效。
+ * 新判据放在**新文件**里 —— 新文件不在任何待复验面上，没有这个问题。
+ *
+ * ---- 为什么要独立成判据（ISS-050 的问题陈述）-------------------------------
+ * `issues.md` / `decisions.md` / `changes.md` 的**行**从来没有被任何判据解析过：
+ * I1–I7 只解析 `eventlog/`。ISS-048 那一行三个片段被 shell 吃掉、留下空洞，
+ * 而**全部判据都报绿**（实测：`newid.js --check` exit 0 · `andyngo-integrity.js` 14 OK / 0 FAIL）。
+ * 记录层既是「判据的输入」也是「人的读物」—— **一行读不通的记录不会触发任何红灯**，
+ * 却会让依据它的判断出错（同族 ISS-026：那条是「文件看不见」，这条是「行看不出来」）。
+ *
+ * 退出码：0 = 干净 / 全部向量符合预期 · 1 = 有命中或向量不符合预期 · 4 = 参数错
+ */
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const { SPEC, hints, classify, checkLine, scanText } = require('./record-shape.js');
+
+const HOME = path.resolve(__dirname, '..');
+const RECORD = path.join(HOME, '.check', 'record');
+const MIN = {}; for (const s of SPEC) MIN[s.prefix] = s.min;
+
+/* ---- 注入向量：畸形行**必须**被抓 ------------------------------------------ */
+const INJECT = [
+  { why: '整段被吃：字段数塌到下限以下',
+    line: 'ISS-901 open 2026-09-16T00:00Z' },
+  { why: '编号丢了前导零',
+    line: 'ISS-92 open 2026-09-16T00:00Z 2026-09-16T00:00Z low 描述 EVT 900' },
+  { why: '前缀被整段吃掉（该行落在记录区里却没有前缀）',
+    line: '901 open 2026-09-16T00:00Z 2026-09-16T00:00Z low 描述 EVT 900',
+    as: 'ISS', by: 'stray' },
+  { why: 'CHG 掉了一整列（md5 对消失）→ 必须按 CHG 的 9 字段下限判',
+    line: 'CHG-904 2026-09-16T00:00Z 某文件 -- -- 10 10 DEC-900' },
+  { why: '制表符混进正文',
+    line: 'ISS-908 open 2026-09-16T00:00Z\t2026-09-16T00:00Z low 描述 EVT 900' },
+];
+
+/* ---- 反向向量：合法行**不得**被抓（假红守门人）------------------------------ */
+const INJECT_OK = [
+  { why: '合法 ISS 行（含中文引号、括号里**有**内容）',
+    line: 'ISS-905 open 2026-09-16T00:00Z 2026-09-16T00:00Z low 描述里有（正常括号）与「正常引号」 EVT 900' },
+  { why: '合法 ISS 行：**引用代码**，空括号与空方括号是代码常态（这正是 HOLES 被否决的原因）',
+    line: 'ISS-909 resolved 2026-09-16T00:00Z 2026-09-16T00:00Z low 实测 `Array.isArray(f1)` 与 `f1[0]` 都对 EVT 900' },
+  { why: '合法 CHG 行（9 字段下限，实际远超）',
+    line: 'CHG-906 2026-09-16T00:00Z a/b.js 11111111111111111111111111111111 22222222222222222222222222222222 10 20 原因写在这里 DEC-900' },
+  { why: '合法 DEC 行',
+    line: 'DEC-907 2026-09-16T00:00Z 决策 依据：实测 替代方案：无 后果：无 EVT 900' },
+  { why: '表头行（`---` 之前）不是记录，不得算「形状不明」',
+    line: '格式：`ISS-<序号> <状态> <首现> <最后更新> <严重度> <描述> <关联事件>`', as: 'ISS', header: true },
+];
+
+/* ---- 已知边界（**不是通过**）：显式钉住「本判据抓不住什么」------------------
+ * ISS-048 的**原始签名**是「反引号被 shell 当命令替换 → 留下空括号」。它抓不住，
+ * 而且**不应**去抓 —— 理由见 `record-shape.js` 文件头（会假红 35 次）。
+ * 断言它 **MISSED** 的作用与 ISS-055 里那条 `node -e "require(<路径>)"` 一样：
+ * **「假装已覆盖」比「承认没覆盖」危险。**
+ * 哪天有人加了空括号规则，这一条会立刻 FAIL —— 那是**提醒他先看 --holes 的量化误伤**。 */
+const BOUNDARY = [
+  { why: 'ISS-048 原形（空括号族）—— **本判据不覆盖**，不可机械判定',
+    line: 'ISS-900 resolved 2026-09-16T00:00Z 2026-09-16T00:00Z low 修 （） 与 （） 两处 EVT 900' },
+];
+
+const mode = process.argv[2] || '--scan';
+
+if (mode === '--inject') {
+  let ok = true;
+  console.log('===== 注入向量：畸形行**必须**被抓 =====');
+  for (const v of INJECT) {
+    const pre = v.as || v.line.split('-')[0];
+    const bad = checkLine(v.line, pre, MIN[pre]);
+    const isStray = v.by === 'stray' && classify(v.line, pre, true) === 'stray';
+    const caught = bad.length > 0 || isStray;
+    console.log((caught ? 'CAUGHT  ' : 'MISSED  ') + v.why);
+    if (!caught) { console.log('        规则没抓住：' + v.line); ok = false; }
+    else console.log('        → ' + (isStray ? 'STRAY（前缀被吃掉）' : bad.join(' · ')));
+  }
+  console.log('===== 反向向量：合法行**不得**被抓（假红守门人）=====');
+  for (const v of INJECT_OK) {
+    const pre = v.as || v.line.split('-')[0];
+    const cls = classify(v.line, pre, !v.header);
+    const bad = cls === 'record' ? checkLine(v.line, pre, MIN[pre]) : [];
+    const clean = bad.length === 0 && cls !== 'stray';
+    console.log((clean ? 'CLEAN     ' : 'FALSE-RED ') + v.why + '  [' + cls + ']');
+    if (!clean) { console.log('        误伤：' + bad.join(' · ')); ok = false; }
+  }
+  console.log('===== 已知边界：本判据**抓不住**什么（显式钉住，不假装已覆盖）=====');
+  for (const v of BOUNDARY) {
+    const pre = v.line.split('-')[0];
+    const bad = checkLine(v.line, pre, MIN[pre]);
+    const missed = bad.length === 0;
+    console.log((missed ? 'BOUNDARY  ' : '**意外抓到了** ') + v.why);
+    if (!missed) { console.log('        → ' + bad.join(' · ') + '（若是新加的规则，先看 --holes 的误伤数）'); ok = false; }
+  }
+
+  /* ---- 计数自检：**只用于显示的数字，最容易腐烂**（因为它不参与任何判定）----------
+   * 第一版 `scanText` 把 `record` 计了两次，打印出「记录行 120」（真值 60）而**没有任何判据会红**。
+   * 这里用一份手工可数的小样本把四类计数逐个钉住。 */
+  const sample = [
+    '# 标题',                    // comment
+    '',                          // blank
+    '格式：`ISS-<序号> …`',       // header（--- 之前）
+    '---',                       // rule → 此后进入正文
+    'ISS-001 open 2026-01-01T00:00Z 2026-01-01T00:00Z low 描述 EVT 001',  // record
+    'ISS-002 open 2026-01-01T00:00Z 2026-01-01T00:00Z low 描述 EVT 002',  // record
+    '第三行没有前缀',             // stray
+    'ISS-3 open 2026-01-01T00:00Z 2026-01-01T00:00Z low 描述 EVT 003',    // record + bad（编号 1 位）
+  ].join('\n');
+  const sc = scanText(sample, { prefix: 'ISS', min: 7 });
+  const cntOk = sc.record === 3 && sc.header === 1 && sc.blank === 1 &&
+    sc.comment === 1 && sc.rule === 1 && sc.stray.length === 1 && sc.bad.length === 1;
+  console.log('===== 计数自检（四类计数 + stray/bad 各一）=====');
+  console.log((cntOk ? 'CLEAN     ' : 'FALSE     ') + 'scanText 计数：' +
+    JSON.stringify({ record: sc.record, header: sc.header, blank: sc.blank,
+      comment: sc.comment, rule: sc.rule, stray: sc.stray.length, bad: sc.bad.length }));
+  if (!cntOk) { console.log('        want: {"record":3,"header":1,"blank":1,"comment":1,"rule":1,"stray":1,"bad":1}'); ok = false; }
+
+  console.log('----');
+  console.log(ok
+    ? '注入 ' + INJECT.length + '/' + INJECT.length + ' 全被抓、反向 ' + INJECT_OK.length + '/' +
+      INJECT_OK.length + ' 全干净、已知边界 ' + BOUNDARY.length + '/' + BOUNDARY.length +
+      ' 确认抓不住、计数自检 1/1'
+    : '**有向量不符合预期 —— 规则要改**');
+  process.exit(ok ? 0 : 1);
+}
+
+if (mode === '--holes') {
+  /* 被否决的那族规则单独打印 —— 想看时看，**不参与判定**。
+   * 留着它的理由：哪天有人想「顺手加个空括号检查」，先看这里有多少误伤。 */
+  console.log('===== 被否决的规则：空括号/空引号族（**不参与判定**）=====');
+  let n = 0;
+  for (const s of SPEC) {
+    const p = path.join(RECORD, s.file);
+    if (!fs.existsSync(p)) continue;
+    fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n').split('\n').forEach((l, i) => {
+      if (classify(l, s.prefix, true) !== 'record') return;
+      const h = hints(l);
+      if (h.length) { n++; console.log('  ' + s.file + ':' + (i + 1) + '  ' + h.join(' · ')); }
+    });
+  }
+  console.log('----');
+  console.log('若这一族参与判定，会假红 ' + n + ' 次 —— **这就是它被否决的量化理由**');
+  process.exit(0);
+}
+
+if (mode !== '--scan') {
+  console.log('用法：node .check/probe-record-shape.js [--scan|--inject|--holes]');
+  process.exit(4);
+}
+
+/* ---- 默认：判定三份真记录 -------------------------------------------------- */
+let hits = 0;
+let unver = 0;
+console.log('===== 记录层「逐行形状」判据（ISS-050）=====');
+for (const s of SPEC) {
+  const p = path.join(RECORD, s.file);
+  if (!fs.existsSync(p)) { console.log('[' + s.id + '] UNVERIFIED ' + s.file + ' 不存在'); unver++; continue; }
+  const r = scanText(fs.readFileSync(p, 'utf8'), s);
+  const bad = r.stray.length + r.bad.length;
+  console.log('[' + s.id + '] ' + s.file.padEnd(14) + (bad ? 'FAIL' : 'OK  ') +
+    '  记录行 ' + r.record + ' · 表头 ' + r.header + ' · 形状不明 ' + r.stray.length +
+    ' · 形状不符 ' + r.bad.length + ' · 字段数下限 ' + s.min);
+  for (const x of r.stray) console.log('         STRAY  第 ' + x.no + ' 行: ' + x.text);
+  for (const x of r.bad) console.log('         SHAPE  第 ' + x.no + ' 行 ' + x.id + '… : ' + x.why.join(' · '));
+  hits += bad;
+}
+console.log('----');
+console.log('说明：本判据**只查**前缀+3位号 / 字段数下限 / 记录区无前缀行 / 制表符。');
+console.log('      **不查空括号对** —— 记录里合法引用代码（`require()` / `f1[0]`），那族规则会假红 35 次。');
+console.log('      被否决的规则与已知边界见 `--holes` / `--inject`。');
+console.log('结论：' + (hits ? 'FAIL 命中 ' + hits + ' 处' : 'OK 三份记录全部合规') +
+  (unver ? ' · UNVERIFIED ' + unver + ' 份' : ''));
+process.exit(hits ? 1 : unver ? 2 : 0);

@@ -1,0 +1,139 @@
+#!/usr/bin/env node
+/* 记录层「原子取号 + 追加」的唯一实现。
+ *
+ * ── 为什么需要它（2026-09-16 实测，不是推测）──────────────────────────────
+ * 同一天两个会话写同一批记录文件，结果是：
+ *
+ *   issues.md    ISS-035 / ISS-036 / ISS-037   各有两行，**内容完全不同**
+ *   decisions.md DEC-021 / DEC-022             各有两行，**内容完全不同**
+ *   changes.md   （无）
+ *
+ * 而**两种写法都返回了成功**：一方用 `>>` 追加、另一方用「锚点插入」。
+ * **一个字节都没丢、行数只增不减、每一行都读得通** —— 坏掉的不是数据，
+ * 是「编号 → 内容」这个映射的**唯一性**。所以它比 ISS-011（并行 Edit 互相覆盖、
+ * 会丢改动）更难发现：**「没丢东西」不等于「没坏」。**
+ *
+ * ── 根因不是「并发」，是「取号是两次操作」──────────────────────────────
+ * 「先读最大号，再另行追加」中间那段时间里，另一个写者可以插队。
+ * 无论谁先谁后，两次操作之间的窗口永远存在 —— 窗口只会变小，不会消失。
+ *
+ * 所以：**取号与追加必须在同一次命令里完成，并且互斥。**
+ * 互斥用 `open(..., 'wx')`（O_EXCL）—— `wx` 是**原子创建**：文件已存在就抛
+ * EEXIST，两个进程不可能同时拿到锁。不用「检查是否存在再创建」那种两段式写法，
+ * 那正是本文件要修掉的形状。
+ *
+ * ── 用法 ────────────────────────────────────────────────────────────
+ *   node .check/record/newid.js <文件> <前缀> <分隔符> <正文>
+ *
+ *   node .check/record/newid.js .check/record/issues.md ISS - "正文…"
+ *   node .check/record/newid.js .check/record/decisions.md DEC - "正文…"
+ *   node .check/record/newid.js .check/record/changes.md CHG - "正文…"
+ *   node .check/record/newid.js .check/record/eventlog/2026-09-16.txt EVT ' ' "2026-… W17 J1 OK …"
+ *
+ *   node .check/record/newid.js --check     # 只扫描重复号，不写任何东西
+ *
+ * 成功时 **stdout 只打印一行** `ALLOC <号>`（好让调用方把拿到的号写进留证）。
+ *
+ * ── 退出码（三态分开，同 DEC-013）────────────────────────────────────
+ *   0  成功写入
+ *   3  锁超时 —— **没有写入**（「没跑成」，不是「跑了且不合格」）
+ *   4  参数错 / **路径错** —— **没有写入**（给原生 node.exe 传了 POSIX 路径也走这里）
+ *   5  `--check` 发现重复号（这是「跑了且不合格」）
+ */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+
+const PAD = 3;          // 号一律 3 位（EVT seq / ISS / DEC / CHG 都是这个约定）
+const LOCK_TRIES = 200; // 200 × 25ms = 5s 上限
+const LOCK_WAIT_MS = 25;
+
+const RECORD = path.join(__dirname, '..', 'record');
+/* `--check` 的扫描面：三份记录 + eventlog 下**全部** .txt
+ * （与 `andyngo-integrity.js` 的「不带参数就查全部日志」同口径，同 DEC-012）。 */
+function checkTargets() {
+  const out = [
+    path.join(RECORD, 'issues.md'),
+    path.join(RECORD, 'decisions.md'),
+    path.join(RECORD, 'changes.md'),
+  ];
+  const evDir = path.join(RECORD, 'eventlog');
+  try {
+    for (const n of fs.readdirSync(evDir).filter((n) => n.endsWith('.txt')).sort()) {
+      out.push(path.join(evDir, n));
+    }
+  } catch (e) { /* 没有 eventlog 目录就不查它 */ }
+  return out;
+}
+
+function dupes(file) {
+  let s;
+  try { s = fs.readFileSync(file, 'utf8'); } catch (e) { return null; }
+  const seen = new Map();
+  for (const m of s.matchAll(/^(EVT|ISS|DEC|CHG)[- ](\d+)/gm)) {
+    const id = m[1] + '-' + m[2];
+    seen.set(id, (seen.get(id) || 0) + 1);
+  }
+  return [...seen].filter(([, n]) => n > 1).map(([id, n]) => id + '×' + n);
+}
+
+if (process.argv[2] === '--check') {
+  let bad = 0;
+  for (const f of checkTargets()) {
+    const d = dupes(f);
+    if (d === null) { console.log('SKIP 读不到: ' + f); continue; }
+    if (d.length) { bad += d.length; console.log('DUP  ' + path.relative(RECORD, f) + ' : ' + d.join(', ')); }
+    else console.log('OK   ' + path.relative(RECORD, f) + ' : 无重复号');
+  }
+  console.log(bad ? '结论: 发现 ' + bad + ' 个重复号（编号→内容 不唯一）' : '结论: 全部唯一');
+  process.exit(bad ? 5 : 0);
+}
+
+const [file, pre, sep, body] = process.argv.slice(2);
+if (!file || !pre || sep === undefined || body === undefined) {
+  console.error('用法: node newid.js <文件> <前缀> <分隔符> <正文>   |   node newid.js --check');
+  process.exit(4);
+}
+const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const re = new RegExp('^' + esc(pre) + esc(sep) + '(\\d+)', 'gm');
+
+const lock = file + '.lock';
+let got = false;
+for (let i = 0; i < LOCK_TRIES; i++) {
+  try { fs.closeSync(fs.openSync(lock, 'wx')); got = true; break; }
+  catch (e) {
+    /* ★ 「锁被占」与「路径根本不存在」必须分开报 —— 本文件第一版把两者都归到
+     * 退出码 3「锁超时」，而实测第一次跑就撞上了后者：Git Bash 的 `mktemp -d`
+     * 给出 `/tmp/tmp.XXXX`，原样传给原生 node.exe 会被解析成 `C:\tmp\...`
+     * （本项目第 5 次踩，见 ISS-003）。当时 stderr 只写了「锁创建失败（非占用）」，
+     * 而退出码 3 的文档含义是「锁超时」—— **归因指向了错的地方**。
+     * 现在：非 EEXIST 一律归到 4「参数/路径错」，并把**路径本身**打出来。 */
+    if (e.code !== 'EEXIST') {
+      console.error('ALLOC-FAIL 不是锁占用（' + e.code + '），未写入');
+      console.error('  目标文件: ' + file);
+      console.error('  锁文件:   ' + lock);
+      console.error('  提示: 给原生 node.exe 传路径必须是 Windows 形式（Git Bash 下先 cygpath -m）');
+      process.exit(4);
+    }
+    /* Atomics.wait 在 node 主线程**可用**（浏览器主线程才禁止）。
+     * 用同步等待而不是 setTimeout：本进程必须在拿到锁之前**不往下走**。 */
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_WAIT_MS);
+  }
+}
+if (!got) { console.error('ALLOC-FAIL 锁超时（' + (LOCK_TRIES * LOCK_WAIT_MS / 1000) + 's），未写入'); process.exit(3); }
+
+try {
+  let s = '';
+  try { s = fs.readFileSync(file, 'utf8'); } catch (e) { s = ''; }
+  let mx = 0, m;
+  while ((m = re.exec(s)) !== null) mx = Math.max(mx, Number(m[1]));
+  const id = pre + sep + String(mx + 1).padStart(PAD, '0');
+  fs.appendFileSync(file, id + ' ' + body + '\n');
+  /* 写完**当场复核**：锁只保证「这次取号没被插队」，
+   * 保证不了「之前已有的重复号」—— 那属于历史，要靠勘误修，不靠锁。 */
+  const after = dupes(file) || [];
+  if (after.length) console.error('WARN 写入成功，但该文件仍有历史重复号: ' + after.join(', ') + '（用勘误处置，不删行）');
+  console.log('ALLOC ' + id);
+} finally {
+  try { fs.unlinkSync(lock); } catch (e) { /* 锁已不在就算了 */ }
+}

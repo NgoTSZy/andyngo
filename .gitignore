@@ -1,0 +1,12 @@
+# 构建产物（可从源文件重新生成）
+*.zip
+dist/
+
+# 运行时产物
+.check/audit/
+.check/tmp/
+hook.log*
+
+# 系统
+.DS_Store
+Thumbs.db

@@ -1,0 +1,139 @@
+# hub · 路由表
+
+**标价口径**：汉字 ×1.0 + ASCII ×0.25（实测，非估算）。
+**两列都看**：`主文件` = **第一跳**成本（懒加载规则用它）；`含 refs` = **完整**成本
+（`references/` 是按需层，只有主文件明确要求时才读）。
+**21 本正文合计**（**表内逐行相加**）：主文件 **51,200** · 含 refs **138,265**（2026-09-16 实测，脚本 `price.js`）。
+⚠ 脚本自报的合计是 **22 本**（含 `hub` 自身）且用 `round(Σxᵢ)`，**比表内逐行相加少几个** ——
+**舍入位置不同，不是抄错**（脚本合计 = `round(Σ)`；表里每格 = `round(xᵢ)`）。本行取**逐行相加**，因为读者能自己核出来。
+（**这个 ±3 曾被误归因成「手算靠不住」** —— 见 `price.js` 注释；其实手算是对的，错的是把两种口径当成一个数。）
+⚠ **此处不引用「22 本合计」那个具体数字**：`hub` 的含 refs 数**包含本文件自身**，
+改一次本文件那个数就变一次（本次实测 3,708 → **4,063**）—— **引用它等于给自己设一个改一次就失效的数**。
+
+⚠ 上一版这里写「合计 **94,900**」且**逐本口径不统一** —— 多数本用的是含 refs，
+而三个 `national-fund-*` 只算了主文件，于是它们被**低估 2.3–5.9 倍**。已按同一口径重算。
+
+**读之前先看标价。** >3,000 的先读触发层（`MODULE.md` 前 ~80 行），>8,000 的说明为什么再读。
+
+---
+
+## 一 · 降级模块（只能经本路由到达）
+
+| 触发词 | 模块 | 主文件 | 含 refs | 什么时候读 |
+|---|---|---:|---:|---|
+| 派专才 / 拆解任务 / 调度 / 分配官 / 启动组合 / 波次 | `national-fund-dispatch/MODULE.md` | 3,125 | **19,056** | 要组合 56 个专才执行任务 ⚠ 本表最贵 |
+| 账本 / 快照 / hash chain / 不可篡改 / 审计日志 / 证明生效 / 可回滚 | `tamper-evident-change-ledger/MODULE.md` | 2,366 | **17,564** | 要在系统上做写操作、要证明改动生效/可回滚 |
+| 验证前端渲染 / 不开浏览器测前端 / DOM 打桩 / renderXxx / 前端静默失效 | `vanilla-js-no-browser-verification/MODULE.md` | 2,801 | **12,578** | 零依赖 JS 项目要验渲染逻辑 |
+| dsh Web UI 打不开 / 端口 3080 refused / 装插件后崩溃 / duplicate loader | `dsh-startup-repair/MODULE.md` | 713 | **8,626** | dsh 或 workbuddy2api 起不来 |
+| 某条能力谁负责 / 能力健康四态 / 数据新鲜度 | `national-fund-ledger/MODULE.md` | 3,327 | **7,853** | 查主权阿尔法的能力登记 |
+| provider 装好但不确定生效 / curl 通但界面不工作 / 模型列表没显示 | `dsh-provider-e2e-verify/MODULE.md` | 953 | **7,244** | 要证明 dsh 插件真能用 |
+| 回测结论 / 跑赢基准 / 信号有信息量 / 两个数打架 / 置换检验 / 前视偏差 | `measurement-self-falsification/MODULE.md` | 1,087 | **5,314** | 一个测量给出「好结果」要先证伪 |
+| 免疫层 / 失败登记表 / 防止同一个坑再犯 / 变异测试 / 检测器 | `failure-immunity-layer/MODULE.md` | **4,331** | 4,331 | 要为真实失败配可执行检测器 |
+| 点按钮 / 读·写控件值 / 截屏 OCR / 控件定位不到 / 点了没生效 | `windows-gui-automation-verify/MODULE.md` | **3,644** | 3,644 | Windows GUI 自动化 |
+| reg / sc / schtasks / netsh / powercfg / 批量编排 / rc=0 却什么都没发生 | `powershell-windows-command-orchestration/MODULE.md` | **3,596** | 3,596 | 按表驱动批量跑 Windows 原生命令 |
+| NautilusTrader / Polymarket 适配器 / run() 假成功 / 连上了但零数据 | `nautilus-trader-deploy/MODULE.md` | 2,940 | 2,940 | 部署交易引擎 |
+| 逐字节一致 / 无损往返 / 规范化层 / 探针层 / 采集层静默丢数据 | `probe-layer-byte-verification/MODULE.md` | 2,677 | 2,677 | 要证明采集层无损 |
+| 拆分文档 / 移动章节 / 改目录 / 检查范围迁移 / 锚点失配 | `structural-edit-regression/MODULE.md` | 1,845 | 1,845 | 改被自动化检查器覆盖的大文档 |
+| 约束模式 / 减少对话 / 只报成功失败 / 最小改动 / 全盘计划 | `constraint-mode/MODULE.md` | 1,186 | 1,186 | 要进入约束模式（通常由 `andyngo` 覆盖） |
+
+---
+
+## 二 · 重叠消歧（**这张表是 hub 存在的理由**）
+
+不加区分会把好几本一起叫起来。以下组合实测共享触发词，必须按**意图**选一本：
+
+| 你实际想要 | 选 | **不要**选 |
+|---|---|---|
+| 证明「改动生效了 / 可回滚 / 没被篡改」 | tamper-evident | ~~probe-layer~~（那是「采集层无损」） |
+| 证明「采集层逐字节无损」 | probe-layer | ~~tamper-evident~~ |
+| 为一次真实失败配检测器 | failure-immunity | ~~tamper-evident~~（虽都含「自愈/防复发」） |
+| 文档拆分后检查器会不会歪 | structural-edit | ~~windows-gui~~（虽都含「没生效」） |
+| 按钮点了没反应 / 控件定位不到 | windows-gui | ~~structural-edit~~ |
+| 部署 Nautilus 引擎、连上了但没数据 | nautilus | ~~trading-venue~~ |
+| 这个场所**能不能连**、延迟多少 | trading-venue（独立注册） | ~~nautilus~~ |
+| 主权阿尔法「现在什么状态、下一步改什么」 | nf-architect（独立注册） | ~~nf-ledger / nf-dispatch~~ |
+| 派哪个专才做哪个动作 | nf-dispatch | ~~nf-architect~~ |
+| dsh Web UI 打不开 / 端口 3080 refused / 装插件后崩溃 | dsh-startup-repair | ~~dsh-provider-e2e-verify~~（那是「装好了但**不生效**」，不是「起不来」） |
+| provider 装好了但不确定生效 / curl 通但界面不工作 / 模型列表没显示 | dsh-provider-e2e-verify | ~~dsh-startup-repair~~（后者是**崩溃**，不是生效性） |
+| 要把 dsh 恢复出厂（保留专案与会话） | dsh-profile-reset（独立注册） | ~~dsh-startup-repair~~（**修** ≠ **重置**） |
+| 点按钮 / 读·写控件值 / UIA / 截屏 OCR / 控件定位不到 | windows-gui | ~~powershell-command~~（那是**原生命令**编排，不碰窗口控件） |
+| reg / sc / schtasks / netsh / 批量编排 / 分段执行 | powershell-command | ~~windows-gui~~ |
+| 回测跑赢基准 / 置换检验 / 两个测法打架 | measurement-self-falsification | ~~failure-immunity~~（那是给**检查器本身**做变异测试） |
+| 给一次真实失败配检测器 / 怀疑假红假绿 | failure-immunity | ~~measurement~~（那是**数字结论**的证伪，不是检查器的） |
+
+**规则：一次只读一本。** 上表里同一行的两本，读完第一本若确实不够，再显式说明原因读第二本。
+
+---
+
+## 三 · 独立注册的 skill（宿主直接触发，不经本表）
+
+| skill | 独门触发词 | 主文件 | 含 refs |
+|---|---|---:|---:|
+| `national-fund-architect` | 主权阿尔法 / 国家系统对冲基金 / 哪些规则只是文字 | 3,501 | **20,502** ⚠ 22 本里最贵 |
+| `wsl-to-windows-capability-probe` | WSL 提权 / 跨界开销 / 令牌完整性 | 2,758 | 2,758 |
+| `trading-venue-preflight` | geo-block / 451 / 地域封锁 / 选托管节点 | 2,308 | 2,308 |
+| `windows-kernel-dump-triage` | 蓝屏 / dump / 0xD1 / 0x7E / 0x50 | 2,216 | 2,216 |
+| `attribution-probe` | 错误归因 / 降级归因 / A-B 对照探针 | 2,127 | 2,127 |
+| `dsh-profile-reset` | 重置 dsh / 清干净插件 / 恢复出厂 | 1,828 | 1,828 |
+| `andyngo` | `/andyngo`、按我的规矩来、进入约束模式、给我三个方案 | 1,871 | **8,072** ⚠ |
+
+⚠ **两本**独立 skill 的标价与完整成本差 **4–6 倍**：`national-fund-architect`
+（3,501 → **20,502**）与 `andyngo`（1,871 → **8,072**）。
+`national-fund-architect` 主文件会要求读 `references/system-map.md` 与
+`references/charter-status.md`；`andyngo` 的 19 个 `references/*.md` 同理。
+上一版把 `national-fund-architect` 标 3,562，**低估 5.9 倍** —— 这是本表最该先看价格的一行。
+（`andyngo` 原标 1,136/1,136，那是**旧版单文件 skill** 的数；2026-09-16 重建为 22 文件系统后
+实测 **1,871/8,072**，`--check` 当场抓到 —— 这就是它存在的理由。**标价必须跟着模块重建一起重算。**）
+
+⚠ **顺序不能反：先改模块 → 再算标价 → 再跑 `--check`。**
+2026-09-16 实测踩到：我先更新了标价（548/6,602）**然后**又改了 `SKILL.md`（补 R1/R3 路由覆盖），
+表**立刻**又旧了（548/6,602 → 561/6,616）—— `--check` 第二次跑才抓到。
+**这不是手抄错，是顺序错**：标价是模块的**函数**，模块一动，标价就必须重算。
+「改完再核对」如果发生在「改完之前」，等于没核对。
+⚠ **同一天第二次踩到（16:22）**：改 `andyngo/SKILL.md`（115 → 127 行，加「留证命名」一节）后
+**没重算标价**，表停在 `561/6,616`，实测已是 `1,871/8,072` —— 这次是**跑 `acceptance.js`** 才抓到的。
+**两件事要记住**：① **上面那句教训是文字，不是机制** —— 改模块的那一刻**没有任何东西**会提醒你；
+能抓到它的只有 `price.js --check` / `acceptance.js` 的第 [10] 项，而那两个**都得有人去跑**。
+② **`--check` 只比对表里的数字，不比对表里的散文** —— 本次 `andyngo` 的数字一改，
+本段「差一个量级」这句就**不再成立**（11.8 倍 → 4.3 倍），是**人工**发现并改成「4–6 倍」的。
+**改数字时必须把引用同一数字的散文一起改**，否则表对了、话错了。
+
+---
+
+## 四 · 维护
+
+- 标价是**实测**的：`node skills/hub/price.js`（正文，两列）· `--desc`（常驻 description）·
+  `--check`（**核对本表的数与实测是否一致**，不一致就退 1）。模块改动后要重算，别拍脑袋改数字。
+  ⚠ 这个脚本 **2026-09-15 才补上** —— 在此之前它**并不存在**，「重算」等于「重写」，
+  于是标价腐烂成「同一张表里两种口径」（多数本含 refs、三个 `national-fund-*` 只算主文件）。
+  **文档说「用脚本算」而脚本不在**，与「报告的形状与事实不符」同族。
+- **改了标价就跑 `--check`。** 本表的数是**手抄**进来的，手抄会错、人眼扫不出。
+  实测价值：`--check` 第一次跑就抓到 4 处「格式与正则不同步」（写表时加了粗体 `**4,331**`、
+  加尾随注释，而正则只认裸数字）→ 4 条**假红**。假红会训练人忽略红色，
+  所以正则要认**人会写的格式**。
+- 标价**不算隐藏文件**。实测：`national-fund-architect/.chk_bak_status.md`
+  （13.7 KB 的**残留备份**）一度被算进那一本，使它虚高约 3,700 token。
+- 新增模块：加进第一节，并**必须**检查它的触发词是否与已有条目重叠 —— 重叠就写进第二节。
+- 标价为 0 或明显偏小的，说明测量脚本漏了折叠语法的 `description`（踩过一次）。
+- **新增 / 改名 / 删除 skill 之后，必须重启 WorkBuddy 应用 —— 光靠 HotReload 不生效。**
+
+  **机制**（2026-09-15 实测）：宿主在**进程启动时**扫描 `skills/*/SKILL.md`，构建注入给模型的
+  `available_skills` 列表。`HotReload` 只在日志里报 `Triggered by skills change: …`，
+  **不重建那个列表**。
+
+  **证据**：
+
+  | 观测 | 数据 |
+  |---|---|
+  | 活跃宿主进程启动 | 19:43:41（日志第一行） |
+  | 那一刻磁盘上的 `MODULE.md` | **14 个**（9 个改于 09:27–16:28，5 个改于 19:24:39） |
+  | 那一刻磁盘上的 `SKILL.md` | 8 个 |
+  | `available_skills` 里的条目 | **8 条，全是 `SKILL.md` 目录；`MODULE.md` 目录名 0 个** |
+  | 19:59 新建探针 → HotReload 触发 | 有（日志两条），但**注入列表一条没变** |
+
+  **两条推论**：
+
+  1. 只把 `SKILL.md` 改名成 `MODULE.md`，就能让它从列表消失（**改名即时生效**，因为下次扫描自然读不到）；
+     但**新加**的 skill 要**重启应用**才出现。
+  2. 判断一个 skill 有没有被注册，**看注入列表比看 HotReload 日志可靠** ——
+     HotReload 只说明「目录有变化」，不说明「谁被加载了」。

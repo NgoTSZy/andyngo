@@ -1,0 +1,138 @@
+#!/usr/bin/env node
+/* price.js —— 复算 hub 路由表（`routes.md`）里的标价
+ *
+ * 口径：汉字 ×1.0 + ASCII ×0.25（与 `routes.md` 维护节一致）
+ *
+ * 为什么要有它：`routes.md` 写着「标价是**实测**的（脚本：…）」「模块改动后要重算」，
+ * 但**脚本当时并不存在** —— 于是「重算」等于「重写」，标价只会腐烂，
+ * 而标价烂掉的后果正是 hub 存在的理由失效（先看见价格才谈得上省）。
+ * 「文档说用脚本算、脚本却不在」与「报告的形状与事实不符」同族。
+ *
+ * 用法：
+ *   node price.js           # 正文成本（主文件 / 含 refs 两列）
+ *   node price.js --desc    # 只算 description —— **这才是每轮都付的常驻成本**
+ */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+
+const SK = path.resolve(__dirname, '..');
+const WEIGHT_ASCII = 0.25;
+
+function tok(s) {
+  const han = (s.match(/[\u4e00-\u9fff]/g) || []).length;
+  const ascii = (s.match(/[\x00-\x7f]/g) || []).length;
+  return han + ascii * WEIGHT_ASCII;
+}
+
+/* frontmatter 的 description —— **要认折叠语法**（`|` / `>`）。
+ * `routes.md` 维护节写着「标价为 0 或明显偏小的，说明测量脚本漏了折叠语法的 description
+ * （踩过一次）」—— 那个坑就是没有这个函数。 */
+function descOf(src) {
+  const m = /^description:[ \t]*(.*)$/m.exec(src);
+  if (!m) return '';
+  const v = m[1].trim();
+  if (/^[|>][-+]?$/.test(v)) {
+    const rest = src.slice(m.index + m[0].length).split('\n');
+    const out = [];
+    for (const l of rest) {
+      if (/^[ \t]+\S/.test(l)) out.push(l.trim());
+      else if (l.trim() === '') continue;
+      else break;
+    }
+    return out.join(' ');
+  }
+  return v.replace(/^['"]|['"]$/g, '');
+}
+
+/* 隐藏文件**不算正文**。实测踩到：`national-fund-architect/.chk_bak_status.md`
+ * 是一个 13.7 KB 的**残留备份**，算进去之后那一本的「含 refs」虚高约 4,600 token。
+ * 标价要回答的是「读这一本要花多少」，不是「这个目录里躺着多少」。 */
+function walk(dir, acc) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name.startsWith('.')) continue;
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) walk(p, acc);
+    else if (e.name.endsWith('.md')) acc.push(p);
+  }
+  return acc;
+}
+
+const rows = [];
+for (const d of fs.readdirSync(SK)) {
+  const dir = path.join(SK, d);
+  if (!fs.statSync(dir).isDirectory() || d.startsWith('.')) continue;
+  const main = ['SKILL.md', 'MODULE.md']
+    .map((f) => path.join(dir, f)).find((f) => fs.existsSync(f));
+  if (!main) continue;
+  const src = fs.readFileSync(main, 'utf8');
+  const allMd = walk(dir, []);
+  rows.push({
+    name: d,
+    kind: path.basename(main),
+    main: tok(src),
+    all: allMd.reduce((a, f) => a + tok(fs.readFileSync(f, 'utf8')), 0),
+    desc: tok(descOf(src)),
+    files: allMd.length,
+  });
+}
+
+if (process.argv.includes('--check')) {
+  /* 核对 `routes.md` 表里的标价与实测是否一致。
+   * 为什么必须有：这张表是**手抄**进文档的，而文档不会自己发现抄错。
+   * 实测踩到过：同一张表里两种口径（多数本含 refs、三个 national-fund-* 只算主文件），
+   * 人眼扫不出来。手算也靠不住 —— 我粗算合计 51,087、脚本说 51,084。
+   * 与「报告的形状与事实不符」同族：**判据要能自己验。** */
+  const src = fs.readFileSync(path.join(__dirname, 'routes.md'), 'utf8');
+  const want = new Map();
+  let m;
+  // 第一节：| 触发词 | `name/MODULE.md` | 主文件 | 含 refs | 什么时候读 |
+  /* 正则要认**人会写的格式**：粗体强调（`**4,331**`）和尾随注释（`**20,502** ⚠ 最贵`）。
+   * 第一版只认裸数字 → 4 本被报成「没登记」= **假红**，而假红会训练人忽略红色。
+   * 记这一笔：检查器的正则和它要检查的表格，**两边都要对**。 */
+  const re1 = /\|\s*`([a-z0-9-]+)\/(?:MODULE|SKILL)\.md`\s*\|\s*\*{0,2}([\d,]+)\*{0,2}[^|]*\|\s*\*{0,2}([\d,]+)\*{0,2}[^|]*\|/g;
+  while ((m = re1.exec(src))) want.set(m[1], { main: +m[2].replace(/,/g, ''), all: +m[3].replace(/,/g, '') });
+  // 第三节：| `name` | 独门触发词 | 主文件 | 含 refs |
+  const re2 = /\|\s*`([a-z0-9-]+)`\s*\|[^|]*\|\s*\*{0,2}([\d,]+)\*{0,2}[^|]*\|\s*\*{0,2}([\d,]+)\*{0,2}[^|]*\|/g;
+  while ((m = re2.exec(src))) want.set(m[1], { main: +m[2].replace(/,/g, ''), all: +m[3].replace(/,/g, '') });
+
+  const act = new Map(rows.map((r) => [r.name, { main: Math.round(r.main), all: Math.round(r.all) }]));
+  let bad = 0, miss = 0;
+  console.log('=== 标价一致性（routes.md ↔ 实测）===');
+  for (const [name, w] of want) {
+    const a = act.get(name);
+    if (!a) { console.log('  x ' + name + ' 表里有、磁盘上没有'); miss++; continue; }
+    if (a.main !== w.main || a.all !== w.all) {
+      console.log('  x ' + name + '  表 ' + w.main + '/' + w.all + '  ≠  实测 ' + a.main + '/' + a.all);
+      bad++;
+    }
+  }
+  for (const [name] of act) {
+    /* `hub` 豁免：它是**路由入口本身**（第二跳），不在自己的表里登记 ——
+     * 这不是「不可发现」，它就是那张表。 */
+    if (name === 'hub') continue;
+    if (!want.has(name)) { console.log('  x ' + name + '  磁盘上有、routes.md 没登记（→ 不可发现）'); miss++; }
+  }
+  console.log('  登记 ' + want.size + ' 本 · 磁盘 ' + act.size + ' 本 · 数值不一致 ' + bad + ' · 缺登记 ' + miss);
+  process.exit(bad || miss ? 1 : 0);
+} else if (process.argv.includes('--desc')) {
+  console.log('=== description 成本（**每轮都注入** —— 这才是常驻开销）===');
+  const inj = rows.filter((r) => r.kind === 'SKILL.md').sort((a, b) => b.desc - a.desc);
+  for (const r of inj) console.log('  ' + r.name.padEnd(36) + String(Math.round(r.desc)).padStart(7) + ' tok');
+  console.log('  ' + '-'.repeat(44));
+  console.log('  注入 ' + inj.length + ' 本 · description 合计 **' +
+    Math.round(inj.reduce((a, r) => a + r.desc, 0)) + ' tok**');
+  console.log('  不注入 ' + (rows.length - inj.length) + ' 本（`MODULE.md`）→ 常驻成本 0');
+} else {
+  console.log('=== 正文成本 ===');
+  console.log('  ' + 'skill'.padEnd(36) + '主文件'.padStart(8) + '含 refs'.padStart(10) + ' md数');
+  const sorted = rows.slice().sort((a, b) => b.all - a.all);
+  for (const r of sorted) {
+    console.log('  ' + r.name.padEnd(36) + String(Math.round(r.main)).padStart(8) +
+      String(Math.round(r.all)).padStart(10) + String(r.files).padStart(6));
+  }
+  console.log('  ' + '-'.repeat(62));
+  console.log('  合计 ' + rows.length + ' 本：主文件 **' +
+    Math.round(rows.reduce((a, r) => a + r.main, 0)) + '** · 含 refs **' +
+    Math.round(rows.reduce((a, r) => a + r.all, 0)) + '** tok');
+}

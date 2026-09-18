@@ -1,0 +1,141 @@
+{
+  "generatedAt": "2026-09-15T13:53:11.011Z",
+  "root": "C:\\Users\\<user>\\.workbuddy-ai\\skills\\andyngo",
+  "fileCount": 22,
+  "totalBytes": 25624,
+  "totalLines": 880,
+  "files": [
+    {
+      "file": "SKILL.md",
+      "bytes": 1857,
+      "lines": 64,
+      "md5": "860c2d7199d85f91691c8d3a9cb69768"
+    },
+    {
+      "file": "assets/andyngo-contract.md",
+      "bytes": 682,
+      "lines": 40,
+      "md5": "62b8f602d8aec5eec2d7a8f07207af1b"
+    },
+    {
+      "file": "references/A-discovery/andyngo-resume.md",
+      "bytes": 418,
+      "lines": 19,
+      "md5": "cc2833fc8253cf9b32714b00522a3104"
+    },
+    {
+      "file": "references/A-discovery/andyngo-retro.md",
+      "bytes": 612,
+      "lines": 25,
+      "md5": "4289781bf32864b039da9b07f45cfdd5"
+    },
+    {
+      "file": "references/A-discovery/andyngo-task.md",
+      "bytes": 1325,
+      "lines": 46,
+      "md5": "b05b2a17edba82f37b9fe39bf20926e2"
+    },
+    {
+      "file": "references/B-execution/andyngo-deploy.md",
+      "bytes": 678,
+      "lines": 25,
+      "md5": "fbcaf19ef5df79c8d47f74b1f314b3c7"
+    },
+    {
+      "file": "references/B-execution/andyngo-fix.md",
+      "bytes": 612,
+      "lines": 24,
+      "md5": "3287e9e26e424723e189d41c6ff1dec6"
+    },
+    {
+      "file": "references/C-assurance/andyngo-audit.md",
+      "bytes": 532,
+      "lines": 30,
+      "md5": "6b4411434ceb844707967a538885505a"
+    },
+    {
+      "file": "references/C-assurance/andyngo-security.md",
+      "bytes": 1055,
+      "lines": 30,
+      "md5": "52908fd461ede0ad53f56cc43df2d0ea"
+    },
+    {
+      "file": "references/C-assurance/andyngo-verify.md",
+      "bytes": 994,
+      "lines": 32,
+      "md5": "fe44bba5f6351cd684077bb8d7bf717a"
+    },
+    {
+      "file": "references/D-evolution/andyngo-evolve.md",
+      "bytes": 818,
+      "lines": 27,
+      "md5": "b31ba64b15843e4f64c524889d38184e"
+    },
+    {
+      "file": "references/D-evolution/andyngo-seal.md",
+      "bytes": 768,
+      "lines": 30,
+      "md5": "5b3e1de009b3b0efd932846a200b2d3f"
+    },
+    {
+      "file": "references/andyngo-agents.md",
+      "bytes": 979,
+      "lines": 33,
+      "md5": "c84fa7a7ebda3e85c9883d4a72b85ba8"
+    },
+    {
+      "file": "references/andyngo-design-pool.md",
+      "bytes": 601,
+      "lines": 18,
+      "md5": "583633a65ee7cb89999fba99d13e58c2"
+    },
+    {
+      "file": "references/andyngo-event-protocol.md",
+      "bytes": 2243,
+      "lines": 71,
+      "md5": "7ab03d9cbd333ac9631cf270011d48f2"
+    },
+    {
+      "file": "references/andyngo-glossary.md",
+      "bytes": 1606,
+      "lines": 40,
+      "md5": "2870dfc26e4aecbd8993a46bc222a511"
+    },
+    {
+      "file": "references/andyngo-record.md",
+      "bytes": 1464,
+      "lines": 51,
+      "md5": "9a272aa538c11cac709dbf7c13d6bec0"
+    },
+    {
+      "file": "references/andyngo-report.md",
+      "bytes": 887,
+      "lines": 33,
+      "md5": "04eb70657081642bc58205ab3f48cfb5"
+    },
+    {
+      "file": "references/andyngo-sources.md",
+      "bytes": 5864,
+      "lines": 170,
+      "md5": "e42c8caa6d03eb691cfd864d3414dce7"
+    },
+    {
+      "file": "scripts/andyngo-audit.sh",
+      "bytes": 413,
+      "lines": 23,
+      "md5": "96c862d73e4b3ef65be1d66cfbad2f86"
+    },
+    {
+      "file": "scripts/andyngo-record.sh",
+      "bytes": 576,
+      "lines": 24,
+      "md5": "3581a9defb00be7e4a8ce8946f74e597"
+    },
+    {
+      "file": "scripts/andyngo-security-scan.sh",
+      "bytes": 640,
+      "lines": 25,
+      "md5": "b2643dab942248bff55e05888a7cb288"
+    }
+  ]
+}

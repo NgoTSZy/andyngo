@@ -1,0 +1,138 @@
+================================================================================
+w15-j1 · ISS-013 结案：C5/C6 的「行号」归因修复
+时间：2026-09-16T01:07Z
+触发：ISS-013（2026-09-15T22:46Z 记录，一直 open）。**不需要用户裁决，故自行推进。**
+================================================================================
+
+【0】ISS-013 原文（当时的记录）
+
+> 【**判据自身的缺陷**（`check-protocol.js` 的 C5），我发现的】C5「活引用」在**文件集模式**下
+> 报**全局行号**、不标来源文件 → **归因错误**。实测 `node .check/check-protocol.js` 输出：
+> 「行 26：引用了不存在的路径：`skills/constraint-mode/MODULE.md` · 该路径在文档里共被引用 2 处
+> （行 26, 973）」，而 `MODE.md` **只有 280 行** —— 行 973 在 `refs/` 的某个文件里，输出却没说是哪个。
+> 同文件第 287 行**有** `loc()`、第 1327 行自称「C5/C6 · 行号现在是 `文件:行`」，
+> 但 C5 用的是 `info.line`（全局行号）不是 `loc(L)` → **实现与自称不符**。
+> **影响**：定位这 5 处悬空指针我花了 6 次工具调用（先怀疑 MODE.md 行数、再怀疑拼接、最后才定位到 refs/）。
+> **未修**：改 1412 行的判据会动到验收 [1] 的被测对象，不宜与 I5 同时改。
+
+--------------------------------------------------------------------------------
+【1】动手前的三件事（都是「先量再改」）
+
+**① 横向扫同类（DEC-013）—— 扫出比 ISS-013 记的更多。**
+```
+$ grep -n "'行 ' +" .check/check-protocol.js
+710:  r.fails.push('行 ' + info.line + '：通配/占位引用一个都匹配不上：' …)   ← C5
+716:  r.fails.push('行 ' + info.line + '：引用了不存在的路径：' …)             ← C5
+790:  r.notes.push('行 ' + t.line + ' 锚点 `' …)                              ← C6
+798:  r.fails.push('行 ' + t.line + '：引用了不存在的文件 `' …)                ← C6
+811:  r.fails.push('行 ' + t.line + '：`' … + '` 在该文件里找不到' …)          ← C6
+```
+**C6 也一样**（`t.line = ln(L)` = 全局行号）→ **自述（第 1344 行）对 C5 和 C6 都是假的**，
+而 ISS-013 只记了 C5。**「被指到的那一个」又一次不等于「全部」。**
+
+**② 锚点检查：变异电池锚定的是 `C5`/`C6` 标签，不是消息文本。**
+```
+$ grep -n 'C5\|C6' .check/mutations-*.js | head
+mutations-independent.js:81  expect: ['C5'], …
+mutations-fourth.js:77/80/83  expect: ['C5'] / ['!C5']
+mutations-fourth2.js:24/27/30/33  expect: ['C5'] / ['!C5']
+```
+→ 改消息文本**不会**造成锚点失配。这是「改这个判据安不安全」的**唯一判据**（不是我的直觉）。
+
+**③ 副本探针（先建，后改）**：`cp check-protocol.js fileset.js MODE.md refs/ → $T`，
+在 `refs/D-evolution.md` 末尾追加一条悬空引用，跑副本 —— 这是「改完怎么证明改对了」的载体。
+
+--------------------------------------------------------------------------------
+【2】修法
+
+**(a) `addRef` 记录每一处的来源**（`lines` 与 `sites` 平行）：
+```js
+function addRef(map, key, info) {
+  const cur = map.get(key);
+  const site = { line: info.line, srcFile: info.srcFile, srcLn: info.srcLn };
+  if (!cur) { info.sites = [site]; info.lines = [info.line]; info.count = 1; map.set(key, info); return; }
+  if (!cur.sites) { cur.sites = [{ line: cur.line, srcFile: cur.srcFile, srcLn: cur.srcLn }]; }
+  if (!cur.lines) { cur.lines = [cur.line]; }
+  if (!cur.lines.includes(info.line)) { cur.lines.push(info.line); cur.sites.push(site); cur.count = cur.lines.length; }
+}
+```
+两处 `addRef` 调用点各加 `srcFile: L.srcFile, srcLn: L.srcLn`。
+
+**(b) 报错改用 `siteOf` / `sitesOf`**（C5 两处 + C6 三处）：
+```
+-   r.fails.push('行 ' + info.line + '：引用了不存在的路径：' + key + …
++   r.fails.push(siteOf(info.sites && info.sites[0]) + '：引用了不存在的路径：' + key + …
+-     (info.count > 1 ? ' · **该路径在文档里共被引用 ' + info.count + ' 处**（行 ' + info.lines.join(', ') + '）' : ''));
++     (info.count > 1 ? ' · **该路径在文档里共被引用 ' + info.count + ' 处**（' + sitesOf(info) + '）' : ''));
+```
+
+**(c) ★ 差点犯的错：抽成唯一一份实现。**
+第一版我写的 `siteOf` 是**内联**同一个表达式：
+```js
+const siteOf = (s) => (!s ? '?' : (s.srcFile ? relName(s.srcFile) + ':' + s.srcLn : String(s.line)));
+```
+而第 287 行的 `loc(L)` 内联的**是同一个表达式** —— 这就是 `.check/fileset.js` 开头那句警告：
+> 「为什么单独一个文件：… 都要它。**复制两份就会静默分叉** —— 而分叉最危险的地方在于它不报错。」
+
+改为**一份实现、两个调用者**：
+```js
+const fmtLoc = (srcFile, srcLn, fallback) => (srcFile ? relName(srcFile) + ':' + srcLn : String(fallback));
+const loc    = (L) => fmtLoc(L.srcFile, L.srcLn, L.i + 1);      // 给人看的（C1–C4/C7/C8 已在用）
+const siteOf = (s) => (!s ? '?' : fmtLoc(s.srcFile, s.srcLn, s.line));   // C5/C6 的引用点
+```
+C6 的 `tloc` 也改成调 `fmtLoc`。
+
+**(d) 自述随之更新**（第 1344 行那句「行号现在是 `文件:行`」**从假变真**）。
+
+--------------------------------------------------------------------------------
+【3】实测
+
+**真树（改后）**：C1–C8 **全部 PASS**（与改前一致 —— 这是「没碰坏」的证据）
+```
+PASS C1 目录 → 正文 · PASS C2 正文 → 目录 · PASS C3 单值量 · PASS C4 ASK 配额
+PASS C5 活引用 · PASS C6 跨文件锚点 · PASS C7 「已落」声明 · PASS C8 核对命令
+```
+
+**副本探针（改后）** —— 这才是归因修复的直接证据：
+```
+$ cp .check/{check-protocol.js,fileset.js} MODE.md refs/ → $T
+$ printf '\n活引用探针：`skills/ghost-probe/SKILL.md`。\n' >> $T/refs/D-evolution.md
+$ node $T/.check/check-protocol.js | grep ghost-probe
+  ✗ refs/D-evolution.md:2：引用了不存在的路径：skills/ghost-probe/SKILL.md（原文 `skills/ghost-probe/SKILL.md`）
+```
+**多处引用也各带自己的文件**（改前只会给一串裸数字）：
+```
+  ✗ refs/E-decisions.md:332：… ~/.codebuddy/settings.json … · **该路径在文档里共被引用 6 处**
+     （refs/E-decisions.md:332, refs/E-decisions.md:709, refs/E-decisions.md:803,
+       refs/E-decisions.md:845, refs/E-decisions.md:957, refs/F-execution.md:44）
+```
+★ 注意最后两处**跨文件**（`E-decisions.md` + `F-execution.md`）—— 改前这一串是
+`（行 332, 709, 803, 845, 957, …）`，而 `E-decisions.md` 没有 957 行。**那就是 ISS-013 说的那个形状。**
+
+**冻结件**：
+```
+4f0aa2d0c63c2d1a46bd3e86cdbeebc6  .check/check-protocol.js   （1434 行；改前 1412 行）
+```
+
+--------------------------------------------------------------------------------
+【4】为什么现在才修（以及为什么这次能修）
+
+ISS-013 当时的记录写着「**未修**：改 1412 行的判据会动到验收 [1] 的被测对象，
+不宜与 I5 同时改」。那句话**到现在仍然成立**，改变的是**现在没有别的东西同时在改**：
+- 判据 I5 v3.7 已冻结并回派 W9；
+- 验收 [1] 的被测对象（`check-protocol.js`）是**这次唯一**的改动；
+- 且**改前先证明了「电池锚定标签不锚定文本」**，把「会不会造成锚点失配」这个风险**量掉**了。
+
+★ **可复用动作**：改一个被判据/电池依赖的判据之前，先 `grep expect:` 看**它们到底锚在什么上**
+（标签？消息文本？文件名？）。**这一条 grep 把「不可评估的风险」变成了「可评估的风险」。**
+
+--------------------------------------------------------------------------------
+【5】仍未结 / 待裁决（不变）
+
+1. W9 第五轮复验 —— **结论未回**（已要求它重发；期间它那条 `completed` 通知没有携带内容）。
+2. `skills/constraint-mode/SKILL.md` 不存在（7 处引用）→ 建文件还是改引用（ISS-025）。
+3. 规格原文 §六是否补 `resume`/`evolve`（DEC-016 只改了 `SKILL.md` 侧）。
+4. W9 CAVEAT「留证必须位于留证目录**顶层**」是否入规。
+5. `evidence/` 下非约定命名文件不被任何判据看见（ISS-026）。
+6. CHG-025「冻结 md5」做法已被证伪（4 次勘误、单文件失效 6 次）→ 建议改版本表，未实施。
+================================================================================

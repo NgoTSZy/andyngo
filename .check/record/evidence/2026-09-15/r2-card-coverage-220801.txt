@@ -1,0 +1,92 @@
+===== R2 修复 · 速查卡 ↔ 判事件表 入口覆盖 · 双向测 =====
+时间: 2026-09-15T14:08:59Z
+规格: C:\Users\<user>\Desktop\andyngo build.md.txt （§六 速查卡 第 1188-1196 行）
+被测: skills/andyngo/SKILL.md
+判据脚本: %TEMP%/card-entry-coverage.sh（口径一 comm 求差集）
+          %TEMP%/card-entry-coverage2.sh（口径二 逐名 grep）
+
+----- 零 · 判据守门人自测（先证明判据不会空转报 PASS）-----
+拿一个不存在的规格路径跑：若解析出 0 个名字却报 PASS，则整条判据是空的。
+$ bash card-entry-coverage.sh /c/nonexist/spec.md skills/andyngo/SKILL.md
+sed: can't read /c/nonexist/spec.md: No such file or directory
+速查卡解析出 0 个名字（预期 8）—— 规格路径/行号漂移，判据失效
+VERDICT: UNVERIFIED（判据空转，不报 PASS）
+RC=2  ← 期望 2（UNVERIFIED），不是 0
+
+----- 一 · 口径一：comm 求差集 -----
+
+## 该红的红 · 修前（被测 = as-spec 原件 .check/record/evidence/2026-09-15/SKILL.md.as-spec-220801）
+速查卡承诺: deploy fix issue retro seal security start verify 
+判事件表接住: issue task 
+缺口(MISSING): deploy fix retro seal security start verify 
+缺口数 = 7
+VERDICT: FAIL（速查卡有 7 个入口接不住）
+RC=1  ← 期望 1
+
+## 该绿的绿 · 修后（被测 = 现盘 SKILL.md）
+速查卡承诺: deploy fix issue retro seal security start verify 
+判事件表接住: deploy fix issue retro seal security start task verify 
+缺口(MISSING):  
+缺口数 = 0
+VERDICT: PASS（速查卡 8 个入口全部被接住）
+RC=0  ← 期望 0
+
+----- 二 · 口径二：逐名 grep（独立实现，不复用 comm/sort）-----
+
+## 修前（as-spec 原件）
+  MISS  /andyngo deploy
+  MISS  /andyngo fix
+  hit   /andyngo issue
+  MISS  /andyngo retro
+  MISS  /andyngo seal
+  MISS  /andyngo security
+  MISS  /andyngo start
+  MISS  /andyngo verify
+口径二 缺口数 = 7
+VERDICT: FAIL
+RC=1  ← 期望 1
+
+## 修后（现盘）
+  hit   /andyngo deploy
+  hit   /andyngo fix
+  hit   /andyngo issue
+  hit   /andyngo retro
+  hit   /andyngo seal
+  hit   /andyngo security
+  hit   /andyngo start
+  hit   /andyngo verify
+口径二 缺口数 = 0
+VERDICT: PASS
+RC=0  ← 期望 0
+
+----- 三 · 反向复现（counterproof）-----
+同一脚本、同一规格，只把被测文件从现盘换回 as-spec 原件 ——
+RC 必须由 0 变回 1、缺口由 0 变回 7。上面「修前」两段即为该复现。
+两种口径独立实现，结论一致（7 → 0），不是同一个 bug 的两种写法。
+
+----- 四 · 变更本身 -----
+$ diff <as-spec> <现盘>
+31c31,32
+< 显式：`/andyngo task` → TASK
+---
+> 显式：`/andyngo start <任务>` → TASK（`/andyngo task` 同义）
+> 显式：`/andyngo fix` `/andyngo verify` `/andyngo security` `/andyngo deploy` `/andyngo retro` `/andyngo seal` → 各自同名事件
+
+$ md5sum
+860c2d7199d85f91691c8d3a9cb69768 *.check/record/evidence/2026-09-15/SKILL.md.as-spec-220801
+653570d7ce66e5ff46a1319422073f8c *skills/andyngo/SKILL.md
+
+$ wc -l
+  63 .check/record/evidence/2026-09-15/SKILL.md.as-spec-220801
+  64 skills/andyngo/SKILL.md
+ 127 total
+
+----- 五 · 边界说明（判据的适用范围）-----
+1) 本判据是**单向包含**（速查卡 ⊆ 判事件表），不检查反向。
+   理由：速查卡是给用户看的契约，多写一个表里没有的名字 = 用户照卡片操作失效；
+   反之表里多一个卡片没写过的名字（如 task）= 无害，且 §3.1 原文就有它，不删。
+   因此口径二对 task 不报 hit —— 它不在卡片上，本就不该被要求。
+2) 本判据**不判语义**：它只保证「名字被接住」，不保证接住的事件对（如 fix→FIX）。
+   语义对应靠人工读那一行，见 diff 输出。
+3) 本判据**不覆盖 R1/R3**：「开始」（中文触发词）与 resume/evolve（无入口）不在速查卡上，
+   本判据对它们恒为不适用 —— 它们仍 open（ISS-004）。

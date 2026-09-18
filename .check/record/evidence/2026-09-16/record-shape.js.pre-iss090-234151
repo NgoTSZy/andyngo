@@ -1,0 +1,145 @@
+#!/usr/bin/env node
+/* record-shape.js —— 记录层「逐行形状」规则的**唯一实现**（纯函数，无副作用）
+ *
+ * 为什么必须只有一份：规则被**判据**与**它的双向测**共用 ——
+ *   ① `.check/probe-record-shape.js --scan`（**判定**真记录）
+ *   ② `.check/probe-record-shape.js --inject`（**双向测**：注入向量必须被抓、合法行不得被抓）
+ *
+ * 【2026-09-16 更正一处过时描述】原文写的是「① `andyngo-integrity.js` 的 I8/I9/I10」——
+ * **实测那个文件里没有 I8/I9/I10**（`grep -cE 'I8|I9|I10' .check/andyngo-integrity.js` = **0**）：
+ * 第一版加进去后**回退了**（理由见下段），**回退时没改这句注释**。
+ * 实测唯一的使用者是 `probe-record-shape.js`。**「文档说 X、实际不是 X」**，与本项目其它同族一致。
+ * 若各写一份，它们会**静默分叉**：探针报「5/5 抓住」，而判据用的是另一套逻辑 ——
+ * 于是「测过了」与「判据真的会红」是两件事（同 ISS-007：**同源判据不算两个判据**；
+ * 这里更糟，是**两份实现互相背书**）。
+ * host-log.js 文件头对这件事已经写过一次：「唯一一份（acceptance 与自测共用，复制会静默分叉）」。
+ *
+ * ---- 规则是怎么定下来的（这一步比规则本身重要）-----------------------------
+ * 候选原本五条（含「空括号对」「连续两空格」「反引号包空格」）。第一版探针扫三份真记录
+ * 命中 **44 处**，**全部是合法内容**：
+ *   · `()` / `[]` / `""` / `''` 在记录里是**代码**的常态（`require()` / `f1[0]` /
+ *     `Array.isArray(f1)` / `--get <路径> <vN>`），不是空洞；
+ *   · `` ` ` `` 会命中「两个代码段之间隔一个空格」（`` `a` `b` ``）；
+ *   · 「连续两空格」在**正例（ISS-040）与反例（ISS-048）里都出现** ——
+ *     **一个在正例与反例里都成立的信号，区分度是 0。**
+ * **一条一上线就假红 44 次的判据会被训练成忽略（DEC-019）—— 那比没有判据更坏。**
+ * 所以只留**能区分正反例**的四条：
+ *   ① 前缀 + 3 位号 + 空格   → 抓编号截断
+ *   ② 字段数下限             → 抓整段被吃掉
+ *   ③ 记录区里没有前缀的行   → 抓**前缀本身**被吃掉
+ *   ④ 行首 id 后**紧跟**相同 id → 抓「正文里又写了一遍号」（ISS-085；精确版实测误伤 **0**）
+ *
+ * ---- 已知边界（不假装已覆盖）----------------------------------------------
+ * ISS-048 的**原始签名**（反引号被 shell 当命令替换 → 留下空括号）**抓不住，也不该去抓**：
+ * 空括号在中文里既可能是空洞、也可能是作者本意，**无法从单行文本机械判定**。
+ * `probe-record-shape.js --inject` 里显式钉着这条向量（断言 MISSED）——
+ * 哪天有人把空括号规则加进**本文件**，那一条会立刻报 FAIL，提醒他先看 `--holes` 的量化误伤。
+ *
+ * ★ 2026-09-16 W23 J14 更正一句话（原文承诺的范围比它的能力大）：
+ *   原文写「哪天有人加了空括号规则，这一条会立刻报 FAIL」—— **实测证明这句只对本文件成立**。
+ *   空括号族的规则**早已存在于另一个文件**：`newid.js` 的写入时刻 WARN（`suspectHits()`），
+ *   而**本判据与那条绊线都看不见它**（绊线钉的是本文件 `checkLine` 的行为）。
+ *   于是「守门人与被守的规则不在同一个文件」→ **守门人永远不响**，而它看起来是武装着的。
+ *   （同族：ISS-026「隐形文件」· W23 J13「存在 ≠ 可达」。）
+ *   那条 WARN **不是判据、是启发式**（只提醒不拦），所以两者**分工不重复**：
+ *   本文件管「**已落盘的行**形状是否合规」，`newid.js` 管「**写入那一刻**正文是否可能被 shell 吃掉」。
+ *   它的尺子在 `node .check/record/newid.js --inject`，已接进载体第 9 段（RECORD-WARN-INJECT）。
+ *   **不要**因为这条边界就把空括号规则加进本文件 —— 那正是 `--holes` 在量化劝退的事。
+ */
+'use strict';
+
+/* 形状约定**抄自三份文件的表头**，不是编的：
+ *   issues.md    `ISS-<序号> <状态> <首现> <最后更新> <严重度> <描述> <关联事件>`              → 7
+ *   decisions.md `DEC-<序号> <时间> <决策> <依据> <替代方案> <后果> <关联事件>`                 → 7
+ *   changes.md   `CHG-<序号> <时间> <文件> <md5前> <md5后> <行数前> <行数后> <原因> <关联决策>` → 9
+ * `min` 是**下限**：描述里带空格会让实际字段数远超它。下限的作用是抓「整段被吃掉」。 */
+const SPEC = [
+  { file: 'issues.md', prefix: 'ISS', min: 7, id: 'I8' },
+  { file: 'decisions.md', prefix: 'DEC', min: 7, id: 'I9' },
+  { file: 'changes.md', prefix: 'CHG', min: 9, id: 'I10' },
+];
+
+/* 被否决的那一族规则 —— **不参与判定**，只在 `--holes` 模式下打印。
+ * 留着它的理由：哪天有人想「顺手加个空括号检查」，先看这里有多少误伤。 */
+const HOLES = [
+  ['（）', '中文空括号'], ['( )', '半角空括号（带空格）'], ['()', '半角空括号'],
+  ['【】', '中文空方括号'], ['[]', '半角空方括号'], ['「」', '中文空引号'],
+  ['“”', '中文空双引号'], ['""', '半角空双引号'], ['\'\'', '半角空单引号'],
+  ['` `', '反引号包空格'], ['``', '空反引号对'],
+];
+
+function hints(line) {
+  const h = [];
+  for (const [s, why] of HOLES) if (line.indexOf(s) >= 0) h.push(why + ' `' + s + '`');
+  if (/\S  \S/.test(line)) h.push('连续两空格');
+  return h;
+}
+
+/* 行分类。装饰行**不检查** —— 检查面每扩大一寸，假红的机会就多一次。
+ *
+ * **分区规则**：第一个 `---` 之前是**表头区**，一律放行。
+ * 第一版把 `格式：…` / `序号从 001 起…` 判成「形状不明」，一次报了 9 处假红 ——
+ * **判据必须知道文档的分区，不能只认前缀。** */
+function classify(line, prefix, inBody) {
+  if (line.trim() === '') return 'blank';
+  if (line.startsWith('#')) return 'comment';
+  if (/^-{3,}\s*$/.test(line)) return 'rule';
+  if (!inBody) return 'header';
+  if (line.startsWith(prefix + '-')) return 'record';
+  return 'stray';
+}
+
+/* 单行形状检查 —— 返回问题清单（空数组 = 合规）。**不检查空括号对**，理由见文件头。 */
+function checkLine(line, prefix, min) {
+  const bad = [];
+  const m = new RegExp('^' + prefix + '-(\\d+)(\\s|$)').exec(line);
+  if (!m) bad.push('编号后不是「3 位数字 + 空格」');
+  else if (m[1].length !== 3) bad.push('编号 ' + m[1] + ' 不是 3 位（' + m[1].length + ' 位）');
+  const nf = line.split(/\s+/).filter(Boolean).length;
+  if (nf < min) bad.push('字段数 ' + nf + ' < 下限 ' + min + '（有整段被吃掉？）');
+  if (line.indexOf('\t') >= 0) bad.push('含制表符');
+  /* ④ 号重复（ISS-085）—— 抓「正文文件里又写了一遍号」。
+   * 取号器会在正文前面**再加一次**号，于是行首成了 `ISS-082 ISS-082 resolved …`。
+   * **这条规则必须只认「紧跟」**：宽松版「本行内出现过自己的号」实测命中 7 行、假红 **4 行（57%）** ——
+   * `ISS-063`（「补充 ISS-063：已复现」）· `ISS-064`（「勘误汇总」）· `DEC-024`（「【改号登记】」）·
+   * `CHG-039`（「勘误」）**都是合法的自指**：一个在正例与反例里都成立的信号，**区分度是 0**
+   * （同本文件头「连续两空格」被否决的理由）。精确版实测命中 **3 行、误伤 0**。 */
+  const dup = new RegExp('^' + prefix + '-(\\d+)\\s+' + prefix + '-\\1(?:\\s|$)').exec(line);
+  if (dup) bad.push('号重复：行首 id 后紧跟相同的 id（正文里又写了一遍号？）');
+  return bad;
+}
+
+/* 扫一份记录 —— 返回计数与问题行。调用方决定怎么报（判据报红 / 探针只打印）。 */
+/* 扫一份记录 —— 返回计数与问题行。调用方决定怎么报（判据报红 / 探针只打印）。
+ *
+ * 【2026-09-16 · 这一段的写法是被一个 bug 逼出来的】
+ * 第一版用 `out[k] = (out[k] || 0) + 1` 统一计数，而 `out` 里 `stray` **已经是个数组** ——
+ * 于是一旦真出现 stray 行，`out.stray` 就被 `+1` 覆盖成**数字**，下一行 `.push` 直接抛
+ * `TypeError: out.stray.push is not a function`。
+ * 更坏的是**它在真记录上看不出来**：三份记录当时 stray=0，数组从未被覆盖 → 判据照报 OK。
+ * 抓住它的是 `--inject` 里那份**手工可数的小样本**（第 7 行故意没有前缀）。
+ * 教训与 ISS-046 同形：**「只用于显示的数字」最容易腐烂，因为它不参与任何判定** ——
+ * 而这里腐烂的还不只是数字，是**下一个真出现畸形行时会崩掉的那条路**。
+ * 所以现在**显式分类**：数组类走 push、标量类走 ++、**认不出的类别单独计 `other`**
+ * （不与数组键撞名，也不会静默消失）。 */
+const SCALAR = ['header', 'blank', 'comment', 'rule'];
+function scanText(text, spec) {
+  const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+  const out = { record: 0, header: 0, blank: 0, comment: 0, rule: 0, other: 0, stray: [], bad: [] };
+  let inBody = false;
+  lines.forEach((l, i) => {
+    const k = classify(l, spec.prefix, inBody);
+    if (k === 'rule') inBody = true;
+    if (k === 'record') out.record++;
+    else if (k === 'stray') out.stray.push({ no: i + 1, text: l.slice(0, 90) });
+    else if (SCALAR.indexOf(k) >= 0) out[k]++;
+    else out.other++;
+    if (k === 'record') {
+      const why = checkLine(l, spec.prefix, spec.min);
+      if (why.length) out.bad.push({ no: i + 1, id: l.slice(0, 12), why });
+    }
+  });
+  return out;
+}
+
+module.exports = { SPEC, HOLES, hints, classify, checkLine, scanText };

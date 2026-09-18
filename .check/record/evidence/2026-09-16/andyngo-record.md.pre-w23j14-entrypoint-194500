@@ -1,0 +1,50 @@
+# 记录层协议
+
+## 三个组件
+① 本协议（写法）
+② scripts/andyngo-record.sh（唯一写入入口）
+③ .check/record/（统一落点）
+
+记录是横切关注点，不是独立 skill。不加 skill。
+
+## 四种记录
+
+### 1 · 事件流  eventlog/<日期>.txt
+EVT <seq> <ts> <wave> <job> <status> <artifact_ptr> <evidence_ptr>
+- seq 与 ts 由脚本生成，不由人报
+- 保留 90 天
+
+### 2 · 问题记录  issues.md
+ISS-<序号> <状态> <首现> <最后更新> <严重度> <描述> <关联事件>
+状态机：open → investigating → resolved → verified
+         ↘ wontfix
+严重度：critical / high / medium / low / info
+
+### 3 · 决策记录  decisions.md
+DEC-<序号> <时间> <决策> <依据> <替代方案> <后果> <关联事件>
+专家术语：ADR
+
+### 4 · 变更记录  changes.md
+CHG-<序号> <时间> <文件> <md5前> <md5后> <行数前> <行数后> <原因> <关联决策>
+
+## 序号规则
+三个序号全部从 001 开始，各自独立。
+
+## 不改历史，只追加
+| 需求 | 做法 |
+|------|------|
+| 修正错误记录 | 不改原记录，追加新记录引用旧 ID |
+| 补录过去事件 | 追加，ts 用真实时间，标记 [backfill] |
+| 删除记录 | 追加墓碑 Tombstone，不删原文 |
+
+## 完整性校验
+□ seq 连续
+□ evidence_ptr 存在
+□ ts 单调递增
+□ 事件数 == 派发数
+
+任何一项失败 → AUDIT 报 FAIL
+
+## 查询血缘
+ISS → EVT → evidence_ptr
+CHG → DEC → EVT

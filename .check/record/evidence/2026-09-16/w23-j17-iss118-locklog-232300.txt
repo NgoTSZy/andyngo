@@ -1,0 +1,97 @@
+# 留证 · W23 J17 · ISS-118 修法实施（锁日志）+ ISS-119 / ISS-120 登记
+# 2026-09-16T23:24Z（UTC）· 对应 EVT 056 · CHG-211 / 212 / 213
+# 工作区根 C:\Users\<user>\.workbuddy-ai
+
+§0 本轮范围（一句话）
+  ISS-118 的**修法实施**：给写权锁加 append-only 日志（`write-lock.js`）+ 自测 23 → 28 项
+  （`write-lock-test.sh`）+ 载体追加第 13 个逻辑段判据（`andyngo-audit.sh`）。
+  过程中**实测出两个新缺陷**，各自登记：ISS-119（`env` 空操作存根）· ISS-120（同轮并行 Edit 静默丢更新）。
+
+§1 起手核对（不信记忆，先看磁盘）
+  写权锁：`node .check/write-lock.js status` → LOCK held holder=W23-J17-ISS118F ttl=90min 已过期=否
+  冻结件 3/3（开工前实测，与 DEC-031 登记的 md5 逐字一致）：
+    e8d1386e91e983c4961f5796a2486558  .check/andyngo-integrity.js
+    4f0aa2d0c63c2d1a46bd3e86cdbeebc6  .check/check-protocol.js
+    5a2eea14e8a80bf89557ecaf146965ff  .check/tests/i5-bidirectional-test.sh
+  改前基线（实测）：
+    ddb2934e829fc73554d6066983701112  .check/write-lock.js                    177 行
+    9e910dbdb98d123bb1f8aca8d6430f93  .check/tests/write-lock-test.sh         150 行
+    fbec93c414e1067acb2a15f0c13d4317  skills/andyngo/scripts/andyngo-audit.sh 386 行
+  改后（实测）：
+    306ab9e588e8bae23fe094b73859bbb4  .check/write-lock.js                    213 行
+    2836c785e7c1bba5599dc37932d44c8b  .check/tests/write-lock-test.sh         216 行
+    161ed266e054518c96919446dd2d9004  skills/andyngo/scripts/andyngo-audit.sh 418 行
+
+§2 「只加不改」的实测证明（不是声明）
+  file-history --get .check/write-lock.js 3 --conv 34b3b3a5
+    → 取回 177 行 · md5 ddb2934e829fc73554d6066983701112 = **与基线逐字节一致**（先核 md5 再 diff）
+  diff <改前> <改后>：`grep -c '^<'` = 1 · `grep -c '^>'` = 37 · 净增 36 行
+    → **36 行新增 + 1 行改写 + 0 行删除**
+  那 1 行改写 = 「已知边界」里 `只读之外只动这一个锁文件` → `只动这两个文件`
+    （新增日志文件后它**不成立**了；留着就是一条错的断言 —— 同 ISS-117 家族）
+
+§3 锁日志：设计要点（为什么只有这三个事件）
+  记：acquire / takeover / release —— **只有状态变化**
+  不记：status —— 它是只读命令，一个「读」不该写历史；且「当时过没过期」可由持有区间推出，
+        记下来只会让日志随「谁看了它」而变化（**证据被读者污染**）
+  行格式：`<ISO 秒级 Z> <ev> <who> [自由文本]`（前 3 字段机器可读；who 不含空格，与锁文件同口径）
+  写不进（只读盘 / 盘满 / 权限 / 父目录不存在）→ try/catch 静默跳过：
+        **绝不让「日志写不了」变成锁的一个新的失效模式**（同 DEC-013 三态分开的用意）
+
+§4 生产路径实测（日志真的在写）
+  .check/.write-lock.log 内容（2 行）：
+    2026-09-16T23:10:27Z release W23-J17-ISS118F
+    2026-09-16T23:15:16Z acquire W23-J17-ISS118F ttl=90min
+  ★ 已知边界：**第一行是 release** —— 那把锁在加日志**之前**就取了，
+    所以**第一条持有区间不完整**（不追认、不补写）
+
+§5 自测：23 → 28 项
+  `bash .check/tests/write-lock-test.sh`
+    → **28 项全通过 · TEST_RC=0 · 跑完 LOCK free · 真日志 0 行 `selftest:`**
+  新增 5 项：24 acquire 记一行 · 25 release 记一行且**只追加**（首行逐字不变）·
+            26 takeover 记一行 · 27 **日志写不进去不挡锁**（父目录不存在 → rc=0）·
+            28 fixture 已清 + 真日志未被污染
+  原有 23 项断言**逐字未动**（唯一动到的既有行 = `L` 的定义之前多一行 `export`）
+
+§6 ISS-119 现场：本机 `env` 是空操作存根
+  command -v env  → /c/Users/<user>/.local/bin/env   （**不是** /usr/bin/env）
+  该文件：328 字节 / 4 行 shell 存根 —— 只把 $HOME/.local/bin 加进 PATH，**不执行命令**，exit 0
+  PATH 位置：/c/Users/<user>/.local/bin = 第 11 位 · /usr/bin = 第 14 位 → 存根**优先**
+  三态实测：
+    env WRITE_LOCK_LOG=… node .check/write-lock.js status   → 无输出 · rc=0    （假成功）
+    env node .check/write-lock.js status                    → 无输出 · rc=0    （假成功）
+    WRITE_LOCK_LOG=… node .check/write-lock.js status       → LOCK free · rc=0 （真执行）
+  env --version → 空 ； /usr/bin/env --version → env (GNU coreutils) 8.32
+  危害链：$L 空操作 → 锁**从没被创建** → 第 17 项内层守卫看不见锁 → **递归**
+  实测规模：**60 个 bash.exe 在跑 write-lock-test.sh**；TaskStop 只杀最外层 → 靠逐个 Stop-Process 清干净
+  二次污染：孤儿一直在抢同一把锁 → 「修好后」首跑 15/16 FAIL；手工复现同一序列**完全正常**
+
+§7 ISS-120 现场：同一轮并行 Edit 静默丢更新
+  一条消息里对 .check/write-lock.js 发 7 个 Edit → **7 个全部返回 Successfully edited**
+  核对：grep -n 'logEvent|WRITE_LOCK_LOG|const LOG' → **只命中 1 行**（:141 release 调用）
+        grep -c '' = **178**（改前 177，只 +1）→ **只有最后 1 个落盘，其余 6 个静默丢失**
+  危害：丢的含 `logEvent` 的**定义**、落的含它的**调用** → `node --check` 通过，但 `release` 会
+        `ReferenceError: logEvent is not defined` —— **检查通过、跑起来才炸**
+  纠正：改成**逐条串行 + 每步核验**（+1 / +4 / +23 行逐步确认），最后用 diff 给精确结论
+  同族：DEC-025（写权锁的动机：「并行 Edit 会互相覆盖且两次都报成功，本项目踩过 3 次」）
+        —— 但那 3 次是**两个写者**；**本条是同一会话、同一条消息、同一个文件** → **锁防不住**
+
+§8 载体与记录层（定稿后实测）
+  bash skills/andyngo/scripts/andyngo-audit.sh → rc=0 · 报告 .check/audit/2026-09-16/audit-231629.txt
+    · **18 段全 EXIT=0**（新增段 ENV-NOT-A-NOOP 也绿）
+    · 段内实测：仓库 .sh 里「env + 变量赋值」写法 = **0 处**
+    · 段内只报不判：本机 env 路径 /c/Users/<user>/.local/bin/env · `env sh -c 'exit 7'` → rc=0
+  node .check/probe-record-shape.js --scan → **OK · 三份记录全部合规 · 豁免 3 条**
+
+§9 未做 / 未修的（诚实登记）
+  ① **仍然没有「改了但没人持锁」的自动比对判据** —— 对表仍要人做（ISS-118 因此**保持 open**）
+  ② `WRITE_LOCK_LOG` 可覆盖 → 日志**不防篡改**：「读到的都是真的，但『没读到』不能反推『没发生』」
+  ③ `~/.local/bin/env` **本轮未动**（用户主目录 / 环境的事 / 不在仓库可写面内）
+  ④ 日志**只增不删、无轮转**（每行 ~50 字节，暂不构成问题）
+  ⑤ ISS-120 是**工具调用层**的行为，不在本仓库判据面内 → 未加判据，**保持 open**
+  ⑥ 冻结件三件**全程 3/3 未动**（DEC-031）
+
+§10 结论
+  ISS-118：缺口从「**不可判**」降为「**可判但无人判**」→ 状态仍 `open`（修的是「可见」，不是「可靠」）
+  ISS-119：已登记 + **已加判据**（载体第 13 段）· 环境侧未修
+  ISS-120：已登记 · 未加判据（不在判据面内）

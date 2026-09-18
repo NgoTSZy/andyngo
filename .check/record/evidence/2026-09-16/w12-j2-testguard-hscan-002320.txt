@@ -1,0 +1,165 @@
+================================================================================
+w12-j2 · 横向扫兄弟脚本：3/5 个测试脚本缺参不拒跑（ISS-015/017/018）
+时间：2026-09-16T00:23Z
+================================================================================
+
+【起因】ISS-015 是「双向测缺参不拒跑 → 打印 73 项失败」。修完之后我意识到：
+这不是一次偶然，而是**一个形状**。于是把 `.check/tests/` 下**全部 5 个脚本**
+逐个裸跑一遍（不带任何参数），看谁会「跑不成却报失败」。
+
+【方法】对每个脚本执行「裸跑」，退出码**不经管道**直接取：
+    bash .check/tests/<脚本> >/tmp/x.out 2>&1; echo $?
+（上一次我用 `... | tail -3; echo $?` 量退出码，拿到的是 tail 的状态 —— 恒 0。
+ 这是本轮的附带教训：**判据认不出形状，这次认不出的是我自己的量测命令**。）
+
+--------------------------------------------------------------------------------
+【结果表 · 5 个脚本裸跑实测】
+  脚本                          裸跑退出码   裸跑时打印的最后一行                     判定
+  ----------------------------  ----------  --------------------------------------  --------
+  i5-bidirectional-test.sh          1       「双向测结论: 有 73 项失败」             ✗ 假红
+  judge-selftest.sh                 1       「自测结论: 有 8 项失败」                ✗ 假红
+  andyngo-manifest.js               1       `Error: EBUSY: resource busy or locked`  ✗ 裸栈
+  card-entry-coverage.sh            2       「VERDICT: UNVERIFIED（判据空转，不报 PASS）」 ✓
+  card-entry-coverage2.js           2       「VERDICT: UNVERIFIED」                  ✓
+
+  **3 / 5 有缺陷。** 两个本来就有守门人的（口径一 / 口径二）恰好是当初被 W6 独立验收
+  逼着补上守门人的那两个 —— 也就是说：**「守门人」这件事上次只补在「被验收指到的地方」，
+  没做横向扫**。这就是本轮把 3 个都补上的理由。
+
+--------------------------------------------------------------------------------
+【① i5-bidirectional-test.sh（ISS-015，已修，详见 w12-j1）】
+  修前裸跑原文开头：
+    cygpath: can't convert empty path
+    mkdir: cannot create directory ‘’: No such file or directory
+    cp: cannot stat '/.check/record/eventlog/2026-09-15.txt': No such file or directory
+    cp: cannot stat '/.check/record/exemptions/2026-09-15.md': No such file or directory
+    find: ‘/.check/record/evidence/2026-09-15’: No such file or directory
+    sed: can't read /r1/record/eventlog/2026-09-15.txt: No such file or directory
+  修后：
+    bash .check/tests/i5-bidirectional-test.sh                  → EXIT=0「全通过（0 失败）」
+    bash .check/tests/i5-bidirectional-test.sh /nonexistent-root → EXIT=2 SKIP
+    bash .check/tests/i5-bidirectional-test.sh <根> /nonexistent.js → EXIT=2 SKIP
+
+--------------------------------------------------------------------------------
+【② judge-selftest.sh（ISS-017，本轮修）】
+  修前裸跑原文（节选）：
+    cygpath: can't convert empty path
+    cygpath: can't convert empty path
+    cygpath: can't convert empty path
+    ===== 判据自测 =====
+    --- T1 守门人：规格路径不存在 → 必须 UNVERIFIED(2)，不许空集 PASS(0) ---
+      口径一 rc=127   口径二 rc=0 （期望都是 2）
+      [FAIL] 口径一 rc=127
+      [FAIL] 口径二 rc=0
+    --- T2 守门人：锚点被抽走 → 口径二必须 UNVERIFIED(2) ---
+    sed: can't read : No such file or directory
+      口径二 rc=0 （期望 2）
+      [FAIL] 口径二 rc=0
+    --- T3 截断弱点 …（同上，rc 127 / 0）
+    --- T4 独立性 …
+    grep: : No such file or directory
+    sed: can't read : No such file or directory
+      [FAIL] 口径一 无硬编码行号
+      [FAIL] 口径二 无锚点
+    --- T5 该绿的绿 …
+      口径一 rc=127   口径二 rc=0 （期望都是 0）
+    [FAIL] 口径一 rc=127
+    [PASS] 口径二 现盘 PASS
+    自测结论: 有 8 项失败
+
+  根因（第 12 行）：`SPEC="$1"; SKILL="$2"; J1="$3"; J2="$4"` —— 缺参不报错。
+    · `$J1` 空 → `bash "" …` → **rc=127**（command not found）
+    · `$J2_W` = `cygpath -m ""` 失败 → 空 → `node "" …` → **rc=0**（空路径被当成合法输入）
+    · 于是 T1/T2/T3/T5 的「期望 2」全部落空 → 报「有 8 项失败」
+
+  **为什么这个比 ISS-015 更值得记**：judge-selftest 是**用来证明「判据没撒谎」的那把尺子**。
+  尺子自己会撒谎，比被测物撒谎更坏 —— 它会把「我命令写错了」变成「判据坏了」，
+  从而让人去改**没坏的东西**。
+
+  修法（与 ISS-015 同构，四参数可省 + 不自洽即 exit 2）：
+    SELF_DIR=$(cd "$(dirname "$0")" && pwd)
+    REPO="${REPO:-$(cd "$SELF_DIR/../.." && pwd)}"
+    SKILL="${2:-$REPO/skills/andyngo/SKILL.md}"
+    J1="${3:-$SELF_DIR/card-entry-coverage.sh}"
+    J2="${4:-$SELF_DIR/card-entry-coverage2.js}"
+    SPEC="${1:-${SPEC:-}}"   # 再依次找 仓库/Desktop 两处
+    # 四项任一缺失 → exit 2（并在 stderr 说明「拒绝把没跑成伪装成判据坏了」）
+
+  修后实测：
+    bash .check/tests/judge-selftest.sh                        → EXIT=0「自测结论: 全通过（0 失败）」
+    bash .check/tests/judge-selftest.sh /nonexistent-spec.md    → EXIT=2 SKIP
+    bash .check/tests/judge-selftest.sh <spec> <SKILL> /nonexistent-j1.sh → EXIT=2 SKIP
+    bash .check/tests/judge-selftest.sh <spec> <SKILL> <J1> <J2>（全参）  → EXIT=0「全通过（0 失败）」
+  全参跑的关键断言（证明改动没碰坏判据本体）：
+      [PASS] 口径一 用硬编码行号定位   [PASS] 口径二 用锚点文本定位
+      [PASS] 两口径零共享代码行（= 0） [PASS] 口径一 现盘 PASS   [PASS] 口径二 现盘 PASS
+      [PASS] 口径一 抓到 security-scan（旧 [a-z]+ 正则会假绿）
+
+--------------------------------------------------------------------------------
+【③ andyngo-manifest.js（ISS-018，本轮修）】
+  修前实测（两种调用都死）：
+    node .check/tests/andyngo-manifest.js            → EXIT=1
+    node .check/tests/andyngo-manifest.js . /tmp/x.json → EXIT=1
+    原文：
+      Error: EBUSY: resource busy or locked, read
+          at Object.readSync (node:fs:736:18)
+          at tryReadSync (node:fs:416:20)
+          at Object.readFileSync (node:fs:470:19)
+          at rec (…/andyngo-manifest.js:26:22)
+          …（裸栈，无上下文）
+
+  根因（第 16 行）：`const ROOT = path.resolve(process.argv[2] || '.')` ——
+  **缺参默认扫当前目录**，而当前目录是整个 `.workbuddy-ai` 仓库，里面有宿主**正在写**的
+  日志文件 → EBUSY。而报错**既不说是哪个文件被占、也不说「你给错了根」**。
+
+  **归因错误，同族于 ISS-013**（`check-protocol.js` 的 C5 在文件集模式下报全局行号、
+  不标来源文件：`MODE.md` 只有 280 行却报「行 973」）。两次的共同点：
+  **判据报错时的「指向性」和判据本身的正确性一样重要 —— 指向错地方比不报还坏。**
+
+  修法（v2 → v3）：
+    ① 缺参默认 `path.join(REPO, 'skills', 'andyngo')`（本脚本的真正用途），不是 `.`
+    ② 根不存在 / 根下无 `SKILL.md` / 缺输出路径 → **exit 2 拒跑**
+    ③ 读取失败 try/catch **点名文件**：`无法读取 <path>（EBUSY）`
+  修后实测：
+    node .check/tests/andyngo-manifest.js                      → EXIT=2
+        SKIP 缺少输出路径。用法: node andyngo-manifest.js [root] <outJson>
+    node .check/tests/andyngo-manifest.js . /tmp/m2.json        → EXIT=2
+        SKIP 根下没有 SKILL.md —— 这不像 skills/andyngo：C:\Users\<user>\.workbuddy-ai
+    node .check/tests/andyngo-manifest.js skills/andyngo <out>  → EXIT=0
+        FILES=22  TOTAL_BYTES=26489
+        TOTAL_LINES(wc 口径)=872   TOTAL_LINES(split 口径)=894
+        自检：linesWc + 差异文件数 == linesRaw ? YES（口径差可解释）
+
+--------------------------------------------------------------------------------
+【④ 两个本来就有守门人的（无需改动，作为对照）】
+  bash .check/tests/card-entry-coverage.sh            → EXIT=2
+      「速查卡解析出 0 个名字（预期 8）—— 规格路径/行号漂移，判据失效」
+      「VERDICT: UNVERIFIED（判据空转，不报 PASS）」
+  node .check/tests/card-entry-coverage2.js            → EXIT=2
+      「读不到规格: undefined —— 判据空转，不报 PASS」
+  另测空串参数（比缺参更阴险，因为 `$#` 是够的）：
+      node …/card-entry-coverage2.js "" ""              → EXIT=2 ✓
+      bash …/card-entry-coverage.sh  "" ""              → EXIT=2 ✓
+  → 这两把尺子**空串也拦得住**，是本轮唯一不需要动的两个。
+
+--------------------------------------------------------------------------------
+【⑤ 修后全部 5 个脚本的冻结哈希（供事后比对）】
+  md5sum .check/tests/*
+    26c4d32fbce4e29420987b094aa2f4a9  card-entry-coverage.sh    (43 行 · 未改)
+    2dd017905c82c2723dca3b9813df7f9d  i5-bidirectional-test.sh  (328 行 · CHG-037)
+    fa1a8ebaf6413fef4bde08fe895fa80d  judge-selftest.sh         (115 行 · 86→115)
+    4bcaf1eccd8a31ac23a0c9ef34bbd60d  andyngo-manifest.js       (103 行 · 77→103)
+    a52a4bee12520c61dbe161f7f14f6c7d  card-entry-coverage2.js   (72 行 · 未改)
+
+--------------------------------------------------------------------------------
+【⑥ 本轮结论（可复用原则）】
+  · **「补守门人」要横向扫同类，不能只补被指到的那一个。** 上次 W6 只指到两个口径脚本，
+    我就只补了那两个；同一目录下另外三个脚本的同一个洞，一直留到今天。
+    这是「改动只落在一条路径上」的**第三种形态**（前两种：CHG-027 引用没跟着改、
+    CHG-039 冻结值没跟着改）。
+  · **尺子比被测物更需要守门人。** 自测/清单脚本撒谎时，人会去改没坏的东西。
+  · **0 通过 / 1 失败 / 2 拒跑，三态必须分开。** 把「没跑成」与「跑了且不合格」
+    混成一个 1，调用方就无法区分「我命令写错了」与「被测对象坏了」。
+  · **报错必须点名。** EBUSY 裸栈 vs「无法读取 X（EBUSY）」—— 前者我花了一次
+    `head -20` 才看出根因是「根给错了」而不是「文件锁」。同族 ISS-013。
+================================================================================

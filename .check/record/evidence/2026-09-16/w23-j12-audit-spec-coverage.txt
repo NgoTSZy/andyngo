@@ -1,0 +1,316 @@
+# W23 J12 · 载体接两条零调用者判据 + 一次「差点造重复判据」的逐字节回退
+# 2026-09-16 · 作业者 w23-j12 · 写权锁 TTL 45min（acquire 时声明）
+
+## 0 · 开工前核对（DEC-031 冻结件）
+
+$ md5sum .check/andyngo-integrity.js .check/check-protocol.js .check/tests/i5-bidirectional-test.sh
+e8d1386e91e983c4961f5796a2486558 *.check/andyngo-integrity.js
+4f0aa2d0c63c2d1a46bd3e86cdbeebc6 *.check/check-protocol.js
+5a2eea14e8a80bf89557ecaf146965ff *.check/tests/i5-bidirectional-test.sh
+
+→ 三件**逐字符一致**，复验继续有效，可以动工。
+
+$ node .check/write-lock.js status
+LOCK free  →  $ node .check/write-lock.js acquire w23-j12 45
+LOCK acquire w23-j12 我声明=45min
+
+## 1 · 调查：规格 §3.N 与磁盘的漂移（上一轮遗留）
+
+修好上一轮测量脚本的两处路径 bug 后（`ROOT` 少一层 `..` + 未补 `skills/andyngo/` 前缀），
+重跑 `spec-sync-measure.js`：
+
+规格段数 = 22 · 逐字一致 = 18 · 有差异 = 4
+
+| 段 | 文件 | 规格行 | 磁盘行 | 差异行 |
+|---|---|---|---|---|
+| 3.21 | `scripts/andyngo-audit.sh` | 22 | 97 | 77 |
+| 3.1 | `skills/andyngo/SKILL.md` | 63 | 127 | 70 |
+| 3.3 | `references/andyngo-event-protocol.md` | 70 | 75 | 7 |
+| 3.20 | `scripts/andyngo-record.sh` | 23 | 23 | 6 |
+
+**结论：4 段全部是良性的，不该同步、也不该判。**
+
+- **规格头部原文**：「你是一个 AI 编程助手。请在本项目根目录下，**按以下规格创建**一套完整系统。」
+  → 规格是**构建指令（种子）**，磁盘是长出来的树。§3.N 是「构建那一刻的完整内容」。
+- §3.21 / §3.1 / §3.3 = **生长**（磁盘多了内容）。
+- §3.20 = **DEC-001 早已登记的有意偏离**：
+  DEC-001 原文「修复 `andyngo-record.sh` 两处规格缺陷（`EV="${7:-}"` → `EV="${5:-}"`；
+  printf 实参去掉多余的 `"${6:---}"`）… 后果：**脚本偏离规格原文 2 处**；原始版本已归档
+  `.check/record/evidence/2026-09-15/andyngo-record.sh.as-spec-135229` 可随时比对。」
+  → 规格侧**故意**保留 as-spec 版作比对基线。**我差点把它当成新缺陷去改规格。**
+
+**为什么「逐字一致」不是一条合格的判据**（三种病态形态逐一排除）：
+- 要它报红 → 它是「**只会乱报**」（漂移是设计使然，永久假阳性）
+- 要它恒绿 → 它是「**只会说 OK**」（= 没有判据）
+- → **这个量本身就不是合格的判据对象。** 该判的是**规格内部一致性**，而那是另一个问题。
+
+## 2 · 真缺口（丙类）：两条有判定力的判据，零生产调用者
+
+| 判据 | 状态 | 调用者 |
+|---|---|---|
+| `.check/tests/card-entry-coverage.sh`（口径一） | 带参 PASS rc=0 · 不带参 UNVERIFIED rc=2 | **0**（`judge-selftest.sh:23-24` 把它当**被测样本** J1） |
+| `.check/tests/card-entry-coverage2.js`（口径二） | PASS rc=0 | **0**（同上 J2） |
+| `.check/record/newid.js --check` | 未登记撞号 0 · 已登记 5 · 悬空 0 · rc=0 | **0**（全仓库只有**注释**提到它） |
+
+→ 与 DEC-010 同形：**判据存在、健康、有判定力，却没人跑。**
+
+## 3 · 交付一：载体新增 `SPEC-COVERAGE` 段
+
+`skills/andyngo/scripts/andyngo-audit.sh` · 97 → 180 行 · `db7d42b60e21a5323a47933671d8d4b0` → `f55474631c547d466a2950c3774eea0d`
+
+- 规格路径：`ANDYNGO_SPEC` env → 否则按 `judge-selftest.sh:27` **同一张候选表**探测 → 都没有则 `SKIP`（**不报 FAIL**，规格在项目外）
+- **两个口径都跑，并显式对照结论**：口径一按硬编码行号 `1185,1207`、口径二按锚点「一页速查卡」。
+  规格会被改（CHG-106 实证），改一次就可能让口径一的区间指到别处 →
+  此时口径一报 `UNVERIFIED(2)` 而口径二照常有结论。**没有对照那一段，读者会把「口径一红」误读成「覆盖坏了」。**
+
+### 3.1 · 实测证据：给原生 node.exe 传 POSIX 路径 = 假红（这一步不是推测）
+
+| | 口径 | 路径形态 | 结果 |
+|---|---|---|---|
+| A | 一（bash） | POSIX `/c/...` | **PASS rc=0** |
+| B | 二（node） | POSIX `/c/...` | **UNVERIFIED rc=2**「读不到规格」← **假红** |
+| C | 二（node） | `cygpath -m` | **PASS rc=0** |
+
+→ 所以段里加了 `win()`（与 `judge-selftest.sh:49-55` 同一实现），**只给 node 用**。
+`judge-selftest.sh:11` 早已记过这个坑（「本项目踩过两次」）—— **路径格式错 ≠ 判据发现问题。**
+
+### 3.2 · 端到端实测（第 1 次）
+
+```
+=== SPEC-COVERAGE (速查卡 ↔ 判事件表) ===
+--- 口径一（bash · 硬编码行号 1185,1207）---
+速查卡承诺: deploy evolve fix issue resume retro seal security start verify
+缺口数 = 0
+VERDICT: PASS（速查卡 10 个入口全部被接住）   EXIT=0
+--- 口径二（node · 锚点「一页速查卡」）---
+缺口数 = 0
+VERDICT: PASS（速查卡 10 个入口全部被接住）   EXIT=0
+两口径结论一致（EXIT=0 / 0）。
+```
+
+## 4 · 交付二：载体新增 `RECORD-ID-UNIQUE` 段 —— 以及一次逐字节回退
+
+### 4.1 · 我先走错的那一步（完整登记，不省略）
+
+我在 `probe-record-shape.js` / `record-shape.js` 里加了一条**新规则 ⑤ 跨行同号**
+（文件级纯函数 `dupIds`），并扩展了豁免表格式。它**跑绿了**：
+
+```
+注入 6/6 全被抓、反向 6/6 全干净、已知边界 1/1 确认抓不住、文件级 6/6（2 必抓 + 4 必净）、计数自检 1/1
+[I8] issues.md OK · 跨行同号 0   [I9] decisions.md OK · 跨行同号 0   [I10] changes.md OK · 跨行同号 0
+结论：OK 三份记录全部合规 · 豁免 8 条
+```
+
+**反向验证**（移开豁免表）也过了，**8 处命中 rc=1**：
+```
+DUPID  ISS-035 出现在第 [46,53] 行（2 次）—— 一个号指多条记录 = 引用歧义
+DUPID  ISS-036 出现在第 [47,54] 行（2 次）
+DUPID  ISS-037 出现在第 [48,55] 行（2 次）
+DUPID  DEC-021 出现在第 [30,33] 行（2 次）
+DUPID  DEC-022 出现在第 [31,34] 行（2 次）
++ SHAPE ISS-082/083/084 号重复（原有规则）
+复原后 md5 eaee54cc9f13213d3392708d0abe05a0 逐字符一致
+```
+
+### 4.2 · 然后发现它是**重复判据**
+
+`newid.js` 的**文件头早就写着这件事**：
+
+```
+ * 同一天两个会话写同一批记录文件，结果是：
+ *   issues.md    ISS-035 / ISS-036 / ISS-037   各有两行，**内容完全不同**
+ *   decisions.md DEC-021 / DEC-022             各有两行，**内容完全不同**
+```
+
+**`newid.js` 就是为这次事故写的**（原子取号 + `O_EXCL` 互斥 + 追加，一次命令完成）。
+而它的 `--check` 模式：
+
+```
+记录根: C:\Users\<user>\.workbuddy-ai\.check\record
+EXEMPT issues.md : ISS-035×2  ← 已逐条登记
+EXEMPT issues.md : ISS-036×2  ← 已逐条登记
+EXEMPT issues.md : ISS-037×2  ← 已逐条登记
+EXEMPT decisions.md : DEC-021×2  ← 已逐条登记
+EXEMPT decisions.md : DEC-022×2  ← 已逐条登记
+OK     changes.md : 无重复号
+OK     eventlog\2026-09-15.txt : 无重复号
+OK     eventlog\2026-09-16.txt : 无重复号
+结论: 未登记撞号 0 · 已登记历史撞号 5 · 悬空豁免 0 · 豁免表 5 条
+```
+
+**逐项对比：`newid.js --check` 全面更优。**
+
+| | `newid.js --check` | 我的 ⑤ |
+|---|---|---|
+| 覆盖文件 | **5 个**（3 记录 + **2 eventlog**） | 3 个（**漏 eventlog**） |
+| 豁免表 | `id-collision-exemptions.md`（5 条，正是这 5 组） | 另建一份（**同一件事两份登记**） |
+| 退出码 | 0/3/4/5/6 三态齐全 | 并入 probe 的 0/1/2 |
+| 实现位置 | 与写入入口**同一文件**（取号与查重同源） | 另一个文件 |
+
+→ **两条同源判据会互相背书**（`record-shape.js` 文件头原话：「同源判据不算两个判据」·
+「若各写一份，它们会**静默分叉**」）。
+
+### 4.3 · 逐字节回退（md5 证据）
+
+```
+$ cp <归档>.pre-w23j12-dupid-094452 <原路径>   （三个文件）
+$ md5sum .check/record-shape.js .check/probe-record-shape.js .check/record/record-shape-exemptions.md
+9170bb1c7cd4e52cbe3065e011b765f3 *.check/record-shape.js
+d42bf44a9c6c0a3ba67e1f9710772e4a *.check/probe-record-shape.js
+6935022797dcec0c15c2f06d3d27a2d1 *.check/record/record-shape-exemptions.md
+→ 三个值**全部等于改前值**（改前实测：9170bb1c / d42bf44a / 69350227）
+
+$ node .check/probe-record-shape.js --inject | tail -2
+注入 6/6 全被抓、反向 6/6 全干净、已知边界 1/1 确认抓不住、计数自检 1/1
+$ node .check/probe-record-shape.js --scan | tail -1
+结论：OK 三份记录全部合规 · 豁免 3 条        ← 回到 3 条（我加的 5 条随之消失）
+```
+
+**归档那一步（出于习惯做的）让「回退干净」变成可证的事，而不是我说的话。**
+
+### 4.4 · 根因：**「读到过」不等于「问过」**
+
+`probe-record-shape.js:28` 我自己写过这句话：
+「而**全部判据都报绿**（实测：`newid.js --check` exit 0 · `andyngo-integrity.js` 14 OK / 0 FAIL）」
+
+**我读过它，却没顺着问一句「那 `--check` 在查什么」。**
+这与 DEC-010 的「提到 ≠ 调用」是**同一族**：都是**看见了符号，没问它的语义**。
+
+### 4.5 · 交付二（改正后）：把 `newid.js --check` 接进载体
+
+新段 `RECORD-ID-UNIQUE (newid.js --check)`，位置紧邻 `RECORD-SHAPE`（同属记录层）。
+**不改 `newid.js` 一个字节** —— 它本来就好，缺的只是调用者。
+
+## 5 · 改动清单（净变更）
+
+| 文件 | 改前 md5 | 改后 md5 | 行数 |
+|---|---|---|---|
+| `skills/andyngo/scripts/andyngo-audit.sh` | `db7d42b60e21a5323a47933671d8d4b0` | `f55474631c547d466a2950c3774eea0d` | 97 → 180 |
+| `.check/record-shape.js` | `9170bb1c7cd4e52cbe3065e011b765f3` | **同左（回退，净零）** | 134 |
+| `.check/probe-record-shape.js` | `d42bf44a9c6c0a3ba67e1f9710772e4a` | **同左（回退，净零）** | 231 |
+| `.check/record/record-shape-exemptions.md` | `6935022797dcec0c15c2f06d3d27a2d1` | **同左（回退，净零）** | 21 |
+
+**净变更只有载体一个文件** —— 三条回退**不计 CHG**（没有净变更可记），只记 ISS（过程）。
+
+## 6 · 归档件（改前版本，逐字符核对一致）
+
+```
+.check/record/evidence/2026-09-16/andyngo-audit.sh.pre-w23j12-speccoverage-093550
+.check/record/evidence/2026-09-16/record-shape.js.pre-w23j12-dupid-094452
+.check/record/evidence/2026-09-16/probe-record-shape.js.pre-w23j12-dupid-094452
+.check/record/evidence/2026-09-16/record-shape-exemptions.md.pre-w23j12-dupid-094452
+```
+
+## 7 · 本轮未做（附理由，不留白）
+
+- **不同步规格 §3.N**：4 段漂移全部良性（3 段生长 + 1 段 DEC-001 有意偏离）。
+  且规格在**项目外 · 无版本管理 · 无判据覆盖 · 无转义机制**（ISS-090 的四缺）。
+- **不改规格 §3.1 镜像**（与 §6 速查卡不一致）：改它要 **+64 行** → **打断口径一硬编码的
+  `1185,1207`**（级联）。口径二用锚点，不受影响。→ 登记 ISS-099。
+- **不判「同体异号」**（`DEC-032`/`DEC-033` 正文逐字相同）：要先定义「正文」的边界
+  （含不含时间戳？`同上（…）` 算不算相同？）—— **口径未定就判 = 可能假红**。→ 登记 ISS-100。
+- **不改 `newid.js`**：它已经正确；缺的是调用者，不是能力。
+
+## 8 · 记录层落盘与核对
+
+```
+ALLOC CHG-117 / ISS-097 / ISS-098 / ISS-099 / ISS-100 / DEC-034 / DEC-035 / EVT 037
+```
+
+**落盘行逐字核对**（先按 `newid.js:174` 折叠 `\s+`，再与正文文件比）：
+```
+一致  CHG-117   一致  ISS-097   一致  ISS-098   一致  ISS-099
+一致  ISS-100   一致  DEC-034   一致  DEC-035
+★ 7 条全部逐字一致
+```
+→ **必须先折叠再比**（折叠是**设计行为**，不是损坏）。上一轮曾因不折叠而误判「不一致」。
+
+**`newid.js:178` 的 WARN 命中一次（ISS-092 第 5 次）**：
+`CHG-117` 正文里有 `win()` —— 一个**零参函数名**，被 `\(\)` 支误报成「shell 吃掉了片段」。
+**本次未误伤**（全程用 `@正文文件`，正文不过 shell），但**假阳性第 5 次**印证 ISS-092 仍 open。
+已给的修法（`/(?<![A-Za-z0-9_])\(\)/`）本轮**仍未实施** —— 理由不变：`newid.js` 没有 `--inject` 双向测，
+**先改就是「判据没有尺子」**。
+
+## 9 · 收尾验证
+
+| 判据 | 结果 |
+|---|---|
+| `newid.js --check` | rc=0 · 未登记撞号 0 · 已登记历史撞号 5 · 悬空豁免 0 · 豁免表 5 条 |
+| `probe-record-shape.js --scan` | rc=0 · 三份记录全部合规 · 豁免 3 条 |
+| `probe-record-shape.js --inject` | rc=0 · 注入 6/6 · 反向 6/6 · 边界 1/1 · 计数自检 1/1 |
+| `andyngo-integrity.js`（I1–I7） | **14 OK / 0 FAIL / 0 UNVERIFIED · RC=0** · I5 `A=35 B=37 豁免=2` · I4 「37 条 ts 合规」 |
+| 载体 `andyngo-audit.sh` 端到端 | 见 §10 |
+
+## 10 · 两条判据抓到了**我自己的错**（不是假阳性）
+
+### 10.1 · 载体第 1 次端到端：`CROSSREF` 报「命中 2 处 · EXIT=1」
+
+对比上一轮报告 `audit-094947.txt`（**命中 1 处**）：
+
+| | 上一轮 | 本轮第 1 次 | 判定 |
+|---|---|---|---|
+| X1 | **HIT**（`spec-sync-measure.js` 含 `exit 2` 未登记） | 同左 | **上一轮遗留**（我的临时脚本） |
+| X4 | OK | **HIT**（`CHG-117 第 2 字段不是 ts`） | **本轮新引入，是我的错** |
+
+### 10.2 · X4 抓到的是真错：`CHG-117` 行漏了 ts
+
+我在拼 CHG 正文时把 `pre()` 写成了「路径开头」而不是「ts 开头」——
+写出的行是 `CHG-117 skills/andyngo/... db7d42b6 f5547463 97 180 【…】`，
+**第 2 字段是路径，不是 ts**（正确格式见 `record.md:28`：`CHG-<序号> <时间> <文件> …`）。
+
+**X4 的设计**（`probe-crossref.js:207-240`）：基线 `changesMaxId = CHG-116`，
+**只判 `id > 基线` 的行**，且**没有新行豁免机制** —— **新行必须合规**。
+
+**处置：在同轮内补回 ts。**
+```
+改前: CHG-117 skills/andyngo/scripts/andyngo-audit.sh db7d42b6… f5547463… 97 180 【W23 J12 · …】
+改后: CHG-117 2026-09-16T09:59Z skills/andyngo/scripts/andyngo-audit.sh db7d42b6… f5547463… 97 180 【W23 J12 · …】
+```
+**为什么可以改**：该行属于**当前尚未封存的工作单元**（写入约 15 分钟前），
+X4 的规则设计本身就假定「新行会合规」—— 否则规则无法执行（唯一替代是抬高基线，
+那是「为了让检查变绿」）。**修正只是补回一个缺失字段，行的语义内容一字未改**，
+且**在此处完整披露**。**不另记 CHG**（记一条「修正 CHG 行」的 CHG 会递归）。
+
+### 10.3 · X1 抓到的是真缺口：临时脚本的 `exit 2` 没登记
+
+`exit-codes.md` **铁律 2** 原文：「新增含 `exit 2` 的文件 → X1 会**自动报红**，强制登记。
+**这是本表存在的意义。**」——**这一轮它真实生效了一次。**
+**铁律 1** 的正当理由也成立（「加行的唯一正当理由是**这个文件真的在用 2，且语义没被写下来**」）：
+`spec-sync-measure.js:9` 未给参数 → `exit 2`，属**甲 · 拒跑**的参数错。
+**已按表结构补登一行**（`exit-codes.md` 43 → 44 行，`c9724de9` → `5949e03d`），记 **CHG-118**。
+
+### 10.4 · 修正后复跑
+
+```
+[X1] OK  退出码语义有一处显式登记（ISS-043）  检查 16 处 · 命中 0
+[X4] OK  新增 CHG 行第 2 字段是合规 ts（新发现）  检查 2 处 · 命中 0
+        历史行（≤ CHG-116）不合规 **11** 条，append-only 不判红
+结论：命中 0 处 · 豁免 0 条 · 悬空 0（豁免 0 + 规则 0）      rc=0
+```
+
+**★ 这一节是本轮最有价值的证据**：X1 与 X4 **不是只会说 OK** ——
+它们在我自己写的两条记录上**各自报了一次红，两次都是真错**。
+（对照本轮早些时候那条被回退的规则 ⑤：它也会红，但红的是**别人已经登记过的事**。）
+
+## 11 · 冻结件复核（收尾，DEC-031）
+
+```
+$ md5sum .check/andyngo-integrity.js .check/check-protocol.js .check/tests/i5-bidirectional-test.sh
+e8d1386e91e983c4961f5796a2486558
+4f0aa2d0c63c2d1a46bd3e86cdbeebc6
+5a2eea14e8a80bf89557ecaf146965ff
+```
+→ 开工前与收尾**两次一致**，复验全程有效。
+
+## 12 · 净变更（最终）
+
+| 文件 | 改前 md5 | 改后 md5 | 行数 | CHG |
+|---|---|---|---|---|
+| `skills/andyngo/scripts/andyngo-audit.sh` | `db7d42b60e21a5323a47933671d8d4b0` | `f55474631c547d466a2950c3774eea0d` | 97 → 180 | CHG-117 |
+| `.check/record/exit-codes.md` | `c9724de957062dd2640b3d9be1b70c6c` | `5949e03d41fffd9ae2cdb5c8f735c3f0` | 43 → 44 | CHG-118 |
+| `.check/record-shape.js` | `9170bb1c7cd4e52cbe3065e011b765f3` | **同左（回退，净零）** | 134 | — |
+| `.check/probe-record-shape.js` | `d42bf44a9c6c0a3ba67e1f9710772e4a` | **同左（回退，净零）** | 231 | — |
+| `.check/record/record-shape-exemptions.md` | `6935022797dcec0c15c2f06d3d27a2d1` | **同左（回退，净零）** | 21 | — |
+| `C:/Users/<user>/Desktop/andyngo build.md.txt` | `e612175054331cf7aad93ca4911e0a90` | **同左（规格本轮零改动）** | 1224 | — |
+
+

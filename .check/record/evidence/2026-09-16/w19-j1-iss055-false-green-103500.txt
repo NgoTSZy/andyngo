@@ -1,0 +1,75 @@
+W19 J1 · 闭合 ISS-051 的未结边界 + 修取数层的**假绿**（ISS-055）
+留证时间：2026-09-16T02:35Z（本地 10:35）
+作业：① 拿 9-15「直接执行」干净正例去验新取数层（ISS-051 留下的未结边界）
+      ② 修同一轮探针反查出来的假绿向量
+
+§0 一句话
+9-15 那个干净正例**验通了**（未结边界闭合）；而同一轮探针反查出取数层一个**假绿**：
+`echo "node .check/acceptance.js"`（只是把字打印出来）被判成「执行过」。已修 + 已加守卫。
+
+§1 缺陷（ISS-055）
+`cmdRunsAcceptance` 用 `RE_WS_RUN = /\b(?:node|bash|sh|source)\s+([^\s;&|"']+\.(?:js|sh))/g`
+**按子串**扫，不管那一段是「命令」还是「数据」。两个向量：
+  ① `echo "node .check/acceptance.js"`                        → 旧实现 **true**（应为 false）
+  ② `cat > n.md <<'EOF' … node .check/acceptance.js … EOF`    → 旧实现 **true**（应为 false）
+**方向是假绿**：判据说「执行过」，而那条命令只是把字打印出来 / 写进文件。
+
+§2 为什么这是更坏的方向
+假红会被看见 —— ISS-051 就是这么被发现的。**假绿不会**：它让 `[98]` 报 OK，而那一轮其实没跑。
+同族：hook 的 `src=host` 伪造、ISS-046 把「在跑」写成「没发生」的反面。
+代价不对称（「报 OK 而没跑」比「报 FAIL 而跑了」贵），所以守卫要优先压在假绿这一侧。
+
+§3 用例为什么没挡住（**这才是本轮的真教训**）
+自测第 49 条的「提到」用例**本意就是挡这个**，但它写的是 `echo "见 .check/acceptance.js"`
+—— **里面没有 `node`**，于是旧实现返回 false，看着是对的。
+**用例写了，但没写到刀刃上**：它命中「路径出现过」，而不是「会假绿的那个形状」。
+
+§4 修法（只动取数层，判定层一字未改 —— 同 ISS-051 的理由）
+① `stripHeredocs(cmd)`：`<<[-]['"]?TAG` 到行首 TAG **整段丢弃**（heredoc 正文是数据，不是命令）
+② `splitQuoted(cmd)`：按引号内外切段，每段带 `pre`（该段引号**之前**那段未加引号的尾部）
+③ 引号里的段**默认不算执行**；例外只有一条 `RE_WS_INTERP_C`
+   `= /(?:^|[\s;&|(])(?:node|bash|sh|source)\s+-[A-Za-z]*[ce]\s*$/`
+   —— `bash -c "…"` / `node -e "…"` 是**真把引号内容当命令跑**。
+   **反例必须挡住**：`grep -e "…"` 的 `-e` **不是**解释器的开关。
+   所以正则里要求「解释器名出现在 `-c/-e` 之前」；只看「有没有 `-e`」会把 grep 放行。
+④ 导出与签名不变（`cmdRunsAcceptance(cmd, wsRoot)`）。
+
+§5 实测（两个方向都测）
+探针 `.check/probe-0915-direct-exec.js` —— **21/21 全绿**：
+  A · 9-15 干净正例：命中 **1** 条 · `t = 2026-09-15T08:18:28.940Z`（精确）
+      不存在的会话 → `null` · 没有该日日志 → `null` · 空 sessionId → `null`
+  B1 · 真执行（必须 true）：直接 / 顶层脚本（指针链）/ `bash -c` / `node -e` 嵌一层 —— **4/4 true**
+  B2 · 假绿向量（必须 false）：echo引号 / printf引号 / `grep -e` / heredoc正文 / grep读 / 只提文件名 —— **6/6 false**
+  B1.5 · 已知边界：`node -e "require('./.check/acceptance.js')"` → **false**（**显式钉住，不是通过**）
+  C · 时间戳：下午4→16 时 · 分 18 · 毫秒 940 · 认不出的形状 → `null`
+自测 `.check/selftest-host-log.js`：**53/53**（新增第 **53** 条，7 个断言逐条钉住两个方向）
+基线 `.check/baseline.json`：`selftest` 52 → **53**，并在 `_note` 里写明第 53 条的存在理由
+（**不同步则 `acceptance.js` 报 DRIFT** —— 不是 FAIL，但仍是黄灯）
+
+§6 9-15 干净正例的原始证据（原文）
+文件：`logs/2026-09-15/.workbuddy-ai__d4cc32b886a20ef977a4262d5d06524a.log`（**377,840 字节**）
+首行：`Workspace Path: c:\Users\<user>\.workbuddy-ai`
+`sessionId` **唯一** = `70cb40a8-6c34-427c-9749-87e99a1964e3`（53 处）
+`[BashTool] execute start` = **1** 条，全文：
+  `[15/9/2026 下午4:18:28.940] [Info] [pid=23756] [BashTool] execute start | command="cd /c/Users/<user>/.workbuddy-ai && node .check/acceptance.js; echo "EXIT_CODE=$?"" | timeout=undefined …`
+→ 解析出 `2026-09-15T08:18:28.940Z`（16:18:28.940 +0800）—— **这是「直接执行」那一支的唯一真实样本，
+   而它在 ISS-051 修完之前从没被验过。**
+
+§7 残留与未验（**不假装已覆盖**）
+- `node -e "require('<路径>')"` 形状**不识别**（已知边界，已钉进自测 53 的 `node_e_require参数`）
+- `env node x.js` / `sudo bash x.sh` / `time node x.js` 等**前缀形状未测**
+- 只验了 9-15 与 9-16 两天 → 「换通道后长期稳定」**仍未证明**
+
+§8 冻结件核对
+`andyngo-integrity.js` `e8d1386e…` / `check-protocol.js` `4f0aa2d0…` —— 本次**一个字节未动**。
+**改前版本已归档**（ISS-054 的教训当场应用，不再把「归档」当纪律）：
+  `.check/record/evidence/2026-09-16/host-log.js.pre-quote-aware-102900`（`3f3192d5…` · 816 行）
+  `.check/record/evidence/2026-09-16/selftest-host-log.js.pre-quote-aware-102900`（`3ec79d94…` · 557 行）
+
+§9 三句
+1. **「用例写了」不等于「用例写到刀刃上」。** 第 49 条本意就是挡假绿，却因为输入里少了
+   一个 `node` 而永远走不到出错那条路。**判据的输入要覆盖「会出错的那个形状」，不是覆盖「那个概念」。**
+2. **假绿比假红贵。** 假红会被看见（ISS-051 就是这么被发现的），假绿不会 ——
+   「报 OK 而实际没跑」与「报 FAIL 而实际跑了」代价不对称，守卫要优先压在假绿那一侧。
+3. **修缺陷时顺手做的那次正向验证，常会把下一个缺陷照出来。** 9-15 正例本来是去闭合旧边界的，
+   结果反查出假绿。**别把探针只当验收用，它也是勘探。**

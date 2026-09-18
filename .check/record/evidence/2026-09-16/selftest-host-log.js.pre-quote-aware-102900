@@ -1,0 +1,557 @@
+#!/usr/bin/env node
+'use strict';
+/* selftest-host-log.js —— 给 `.check/host-log.js` 的自测（用**合成 fixture**）。
+ *
+ * 为什么要有它：`acceptance.js` 里有两处判定**在真实环境里等不到**：
+ *   · [99]（hook）的 OK 分支 —— 需要宿主真的加载并调用一次 hook，
+ *     而那要人先在 `/hooks` 面板放行（人工审批闸门）。
+ *   · [98]（automation 产出）的 OK / FAIL 分支 —— 要等那条日报真的跑到第二次。
+ * 我在验收里写过「这个分支没测过」—— **那条免责声明本身就是待办事项。**
+ * 这里用合成日志把判定逻辑整个跑一遍：**不证明真实环境如何，只证明这段解析对。**
+ *
+ * 为什么必须是合成 fixture 而不是改真日志：
+ * 2026-09-15 我为了测标记，**亲手往真日志里伪造了 4 行** `src=host`，
+ * 留下了一条会误导后来人的假绿。**测试不许写进真日志。**
+ *
+ * 关键用例，各自对应一个真实踩过的坑：
+ *   · 第 1 条：**我自己的 Bash 调用也含 `.check/`**，不许被算成「宿主调用了 hook」
+ *   · 第 6 条：automation 的 `execute result` 行**不是**运行记录，
+ *     只有 `terminal run record written` 才是 —— 都算会重复计数
+ *   · 第 8 条：automation 的行在**根目录的 daemon.log** 里，不在日期目录里
+ *   · 第 9 条：取不到时间戳就报 null，**不许拿「现在」顶替** —— 那会把配对悄悄挪到当下
+ *   · 第 11 条：「没有运行记录」是**未到点**，与「跑了但没产出」不是一回事
+ *
+ * 【fixture 的代表性】第 6/7 条原来用的是**裸文本行**（`[Info] [AutomationRecords] …`），
+ * 而真实日志行是**带 `"timestamp"` 的 JSON**。加了时间戳解析之后那两条当场红 ——
+ * 不是代码错，是**用例不真实**。已改成 `logline()` 生成真形状的行。
+ * 「一份用假数据自证能工作的测试，证明的只是它能处理假数据。」
+ */
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { scanHostLogs, parseLedger, pairRunWithLedger, causalPair, combinePair,
+        parseHostTs, dayOf, findHookTrace, crossCheckHookExit, judgeHookTrace,
+        findSessionAcceptanceRuns, parseWorkspaceTs, cmdRunsAcceptance,
+        PAIR_AFTER_MS, PAIR_MAX_AGE_MS } =
+  require('./host-log.js');
+
+const ROOT = path.join(os.tmpdir(), 'hostlog-selftest-' + process.pid);
+const ROOT2 = path.join(os.tmpdir(), 'hostlog-selftest2-' + process.pid);
+const ROOT3 = path.join(os.tmpdir(), 'hostlog-selftest3-' + process.pid);
+const ROOT4 = path.join(os.tmpdir(), 'hostlog-selftest4-' + process.pid);
+const ROOT5 = path.join(os.tmpdir(), 'hostlog-selftest5-' + process.pid);
+let pass = 0, fail = 0;
+
+function mk(root, rel, text) {
+  const p = path.join(root, rel);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, text);
+}
+
+/* 真形状的宿主日志行：JSON + `"timestamp"` + `message` 数组。 */
+function logline(ts, msg) {
+  return JSON.stringify({
+    timestamp: ts, level: 'info',
+    scope: 'daemon-server:ServerAutomationExecutor', message: [msg],
+  });
+}
+
+function check(title, got, want) {
+  const ok = JSON.stringify(got) === JSON.stringify(want);
+  console.log((ok ? 'PASS  ' : 'FAIL  ') + title +
+    (ok ? '' : '\n      got  = ' + JSON.stringify(got) + '\n      want = ' + JSON.stringify(want)));
+  if (ok) pass++; else fail++;
+}
+
+const A = 'aaaa1111-2222-3333-4444-555555555555';
+const B = 'bbbb1111-2222-3333-4444-555555555555';
+const T = Date.parse('2099-01-02T03:04:05.000Z');
+const iso = (ms) => new Date(ms).toISOString();
+
+/* 账本行 —— 与 `acceptance.js` 收尾写的那一行**同一格式**。 */
+function ledgerLine(ms, exit, ok, fail_, drift, unver) {
+  return iso(ms) + ' exit=' + exit + ' ok=' + ok + ' fail=' + fail_ +
+    ' drift=' + drift + ' unver=' + unver;
+}
+
+try {
+  /* ---- 1 · 三类行混在一份日志里 ---- */
+  mk(ROOT, '2099-01-01/a.log', [
+    /* 宿主 spawn 了一个**插件** hook —— 不算我的 */
+    '[Info] [pid=1] [HookExecutor] spawn pid=11 shell=bash cmd=bash "/x/plugins/cache/foo/setup.sh"',
+    /* **我自己**在 Bash 里跑了一次 hook —— 含 .check/，但**不是宿主 spawn**，不许算 */
+    '[Info] [pid=2] [BashTool] execute start | command="bash .check/hook-post-edit.sh"',
+    /* 宿主 spawn 了**我的** hook —— 只有这一行算 */
+    '[Info] [pid=3] [HookExecutor] spawn pid=12 shell=bash cmd=bash "C:/u/.workbuddy-ai/.check/hook-post-edit.sh"',
+    '（无关的一行）',
+  ].join('\n') + '\n');
+  const r1 = scanHostLogs(ROOT);
+  check('1 只有宿主 spawn 的 .check/ 才算（我自己的 Bash 调用不算）',
+    { ok: r1.ok, mine: r1.mine, spawnTotal: r1.spawnTotal, files: r1.files },
+    { ok: true, mine: 1, spawnTotal: 2, files: 1 });
+
+  /* ---- 2 · 没有任何 .check/ 的 spawn ---- */
+  mk(ROOT2, '2099-01-02/b.log',
+    '[Info] [HookExecutor] spawn pid=21 cmd=bash "/x/plugins/cache/bar/setup.sh"\n');
+  const r2 = scanHostLogs(ROOT2);
+  check('2 没有 .check/ 时 mine=0', { ok: r2.ok, mine: r2.mine, spawnTotal: r2.spawnTotal },
+    { ok: true, mine: 0, spawnTotal: 1 });
+
+  /* ---- 3 · 取**最新**的日期目录：老目录里有命中也不该被读到 ---- */
+  mk(ROOT, '2099-02-01/c.log',
+    '[Info] [HookExecutor] spawn pid=31 cmd=bash "/x/plugins/cache/baz/setup.sh"\n');
+  const r3 = scanHostLogs(ROOT);
+  check('3 只看最新日期目录（2099-01-01 里那条 .check/ 命中不该被读到）',
+    { day: r3.day, mine: r3.mine, files: r3.files }, { day: '2099-02-01', mine: 0, files: 1 });
+
+  /* ---- 4 · 读不到目录 -> ok:false（**不是** mine:0） ---- */
+  const r4 = scanHostLogs(path.join(ROOT, '不存在'));
+  check('4 读不到目录报 ok=false（第三态，不是「0 次」）',
+    { ok: r4.ok, mine: r4.mine }, { ok: false, mine: 0 });
+
+  /* ---- 5 · 超预算 -> complete:false（不许假装扫完了） ---- */
+  mk(ROOT3, '2099-01-03/big.log', 'x'.repeat(4096));
+  const r5 = scanHostLogs(ROOT3, 1024);
+  check('5 超预算报 complete=false', { ok: r5.ok, complete: r5.complete, files: r5.files },
+    { ok: true, complete: false, files: 0 });
+
+  /* ---- 6 · automation：`execute result` 不算运行记录，只有 `terminal run record written` 才算 ---- */
+  mk(ROOT, 'daemon.log', [
+    logline(iso(T), '[AutomationRecords] execute result automationId=' + A + ', runId=' + A + ':1, accepted=true, success=true, deferred=false'),
+    logline(iso(T + 1000), '[AutomationRecords] terminal run record written automationId=' + A + ', runId=' + A + ':1, status=ACCEPTED, sessionId=78fff88d'),
+  ].join('\n') + '\n');
+  const r6 = scanHostLogs(ROOT);
+  check('6 automation：只认 terminal run record written，且时间戳要解析出来',
+    { n: r6.autoRuns.length, first: r6.autoRuns[0] },
+    /* `sessionId` 也在断言里 —— 它是 [98] 因果链的钥匙，**漏抓了整条链就断了**，
+     * 而漏抓不会报错，只会退化成「因果未确认」。所以必须在这里钉住。 */
+    { n: 1, first: { id: A, status: 'ACCEPTED', t: T + 1000, sessionId: '78fff88d', finishedAt: null } });
+
+  /* ---- 7 · 失败状态要能被解析出来（判定逻辑在 host-log，这里只证解析） ---- */
+  mk(ROOT, 'daemon.log', [
+    logline(iso(T), '[AutomationRecords] terminal run record written automationId=' + A + ', runId=' + A + ':1, status=ACCEPTED, sessionId=78fff88d'),
+    logline(iso(T + 1000), '[AutomationRecords] terminal run record written automationId=' + B + ', runId=' + B + ':1, status=FAILED, sessionId=deadbeef'),
+  ].join('\n') + '\n');
+  const r7 = scanHostLogs(ROOT);
+  check('7 第二个 automation 的 FAILED 也被解析出来',
+    { n: r7.autoRuns.length, second: r7.autoRuns[1] },
+    { n: 2, second: { id: B, status: 'FAILED', t: T + 1000, sessionId: 'deadbeef', finishedAt: null } });
+
+  /* ---- 8 · automation 的行在**根目录**的 daemon.log 里，不在日期目录里 ---- */
+  const r8 = scanHostLogs(ROOT);
+  check('8 根目录的 daemon.log 也被扫到（automation 记录在那里）',
+    { day: r8.day, n: r8.autoRuns.length, files: r8.files },
+    { day: '2099-02-01', n: 2, files: 2 });
+
+  /* ---- 9 · 没有时间戳 -> t=null，**不许拿「现在」顶替** ---- */
+  mk(ROOT2, 'daemon.log',
+    logline('', '[AutomationRecords] terminal run record written automationId=' + A + ', status=ACCEPTED') + '\n');
+  const r9 = scanHostLogs(ROOT2);
+  check('9 时间戳取不到就报 null（不猜成「现在」）',
+    { n: r9.autoRuns.length, t: r9.autoRuns[0] && r9.autoRuns[0].t },
+    { n: 1, t: null });
+
+  /* ---- 10 · 账本解析：合法行认，垃圾行丢掉 ---- */
+  const led = parseLedger([
+    ledgerLine(T, 2, 7, 0, 0, 2),
+    '',
+    '这不是账本行，是一句人话',
+    ledgerLine(T + 86400000, 0, 9, 0, 0, 0),
+  ].join('\n'));
+  check('10 账本解析：合法行认、垃圾行丢',
+    { n: led.length, first: led[0], last: led[1] },
+    { n: 2, first: { t: T, exit: 2, ok: 7, fail: 0, drift: 0, unver: 2 },
+      last: { t: T + 86400000, exit: 0, ok: 9, fail: 0, drift: 0, unver: 0 } });
+
+  /* ---- 11 · 配对：没有运行记录 = **未到点**（不是「跑了没产出」） ----
+   * 后面几条一律显式传 `now` —— **判定不许取决于真实时钟**，
+   * 否则这几条会随「什么时候跑测试」变红或变绿（与「断言不许取决于运行次数」同族）。 */
+  const N12 = T + 5 * 60000;
+  const p11 = pairRunWithLedger([], [ { t: T, exit: 2, ok: 7, fail: 0, drift: 0, unver: 2 } ], A,
+    { now: N12 });
+  check('11 没有运行记录 -> UNVERIFIED（未到点，不是「没产出」）',
+    { state: p11.state, line: p11.line }, { state: 'UNVERIFIED', line: null });
+
+  /* ---- 12 · 配对：运行记录在 + 账本行落在窗口内 -> OK ----
+   * 账本行在运行**之后 4 分钟** —— 这是真实形状（acceptance 要跑约 4 分钟）。 */
+  const p12 = pairRunWithLedger(
+    [ { id: A, status: 'ACCEPTED', t: T } ],
+    [ { t: T + 4 * 60000, exit: 2, ok: 7, fail: 0, drift: 0, unver: 2 } ], A, { now: N12 });
+  check('12 运行记录 + 窗口内账本行 -> OK', { state: p12.state, ok: p12.line && p12.line.ok },
+    { state: 'OK', ok: 7 });
+
+  /* ---- 13 · 配对：运行记录在、账本没有 -> **触发了但没产出** ---- */
+  const p13 = pairRunWithLedger([ { id: A, status: 'ACCEPTED', t: T } ], [], A, { now: N12 });
+  check('13 有运行记录、无账本行 -> FAIL（触发了但没产出）',
+    { state: p13.state, why: /没产出/.test(p13.why) }, { state: 'FAIL', why: true });
+
+  /* ---- 14 · 配对：运行本身失败 -> FAIL（不是「没产出」） ---- */
+  const p14 = pairRunWithLedger([ { id: A, status: 'FAILED', t: T } ],
+    [ { t: T + 60000, exit: 1, ok: 0, fail: 1, drift: 0, unver: 0 } ], A, { now: N12 });
+  check('14 status=FAILED -> FAIL', { state: p14.state, why: /没成功/.test(p14.why) },
+    { state: 'FAIL', why: true });
+
+  /* ---- 15 · 配对：status 认不出 -> DRIFT，**不许猜成成功** ---- */
+  const p15 = pairRunWithLedger([ { id: A, status: 'WEIRD_STATE', t: T } ],
+    [ { t: T + 60000, exit: 0, ok: 9, fail: 0, drift: 0, unver: 0 } ], A, { now: N12 });
+  check('15 status 认不出 -> DRIFT（不猜成成功）', { state: p15.state, line: p15.line },
+    { state: 'DRIFT', line: null });
+
+  /* ---- 16 · 配对：账本行在窗口**外**（太旧）-> FAIL，不许配到陈年那一条 ----
+   * 边界用 PAIR_AFTER_MS 本身算，不写死 30 —— 改窗口时这条不会静默失准。 */
+  const p16 = pairRunWithLedger([ { id: A, status: 'ACCEPTED', t: T } ],
+    [ { t: T + PAIR_AFTER_MS + 60000, exit: 0, ok: 9, fail: 0, drift: 0, unver: 0 } ], A, { now: N12 });
+  check('16 账本行在窗口外（太旧）-> FAIL', { state: p16.state, line: p16.line },
+    { state: 'FAIL', line: null });
+
+  /* ---- 17 · 新鲜度闸门：**陈旧的一对配在一起不是证据，是巧合** ----
+   * 这条是「陈旧 OK」的守门人：日志里只剩三天前的运行记录、账本里也只剩三天前那一行，
+   * 两边**仍然配得上** —— 没有闸门就会报「它产出过」，而真相是「它已经三天没跑了」。
+   * 超过 PAIR_MAX_AGE_MS 一律 UNVERIFIED：日志滚掉了 / 日报停了，两者无法区分。 */
+  const p17 = pairRunWithLedger([ { id: A, status: 'ACCEPTED', t: T } ],
+    [ { t: T + 4 * 60000, exit: 2, ok: 7, fail: 0, drift: 0, unver: 2 } ], A,
+    { now: T + PAIR_MAX_AGE_MS + 3600000 });
+  check('17 运行记录超期 -> UNVERIFIED（陈旧配对不许报 OK）',
+    { state: p17.state, line: p17.line }, { state: 'UNVERIFIED', line: null });
+
+  /* ---- 18 · `daemon.old.log` 也要扫（留存期是约束，陈旧由闸门管） ---- */
+  const ROOT4 = path.join(os.tmpdir(), 'hostlog-selftest4-' + process.pid);
+  mk(ROOT4, '2099-01-05/x.log', '（无关）\n');
+  mk(ROOT4, 'daemon.old.log',
+    logline(iso(T), '[AutomationRecords] terminal run record written automationId=' + A + ', status=ACCEPTED') + '\n');
+  const r18 = scanHostLogs(ROOT4);
+  check('18 daemon.old.log 也被扫到（跳过它等于砍掉一半留存期）',
+    { n: r18.autoRuns.length, files: r18.files }, { n: 1, files: 2 });
+  try { fs.rmSync(ROOT4, { recursive: true, force: true }); } catch (e) { /* 未验证，不报失败 */ }
+
+  /* ---- 19 · 扫描未完成时，「没有运行记录」推不出「没跑」 ----
+   * 与第 11 条同样是 UNVERIFIED，但**原因必须不同**：
+   * 11 是「未到点」（扫描完整，确实没有记录），19 是「没测」（扫描不完整，可能在没读到的文件里）。
+   * 把这两种原因压成一句话，就会把一个「没测」读成「没有」。 */
+  const p19 = pairRunWithLedger([], [ { t: T, exit: 2, ok: 7, fail: 0, drift: 0, unver: 2 } ], A,
+    { now: N12, scanComplete: false });
+  check('19 扫描未完成 -> UNVERIFIED，且原因与「未到点」不同',
+    { state: p19.state, 未完成: /未完成/.test(p19.why), 未到点: /未到点/.test(p19.why) },
+    { state: 'UNVERIFIED', 未完成: true, 未到点: false });
+
+  /* ---- 20 · 左边界：账本行**早于**运行记录 10 分钟，仍要算 OK ----
+   * 这是「假红守门人」。探针实测：运行记录是在**整轮跑完之后**才落盘的
+   * （35 秒的活，记录写在收尾）。那条 automation 要跑 acceptance（约 4 分钟）
+   * 再写汇报，所以记录可能比账本行晚好几分钟。
+   * 原来的左边界是 2 分钟 —— 会把「跑了、也有产出」判成「触发了但没产出」。
+   * 假红会训练人忽略红色，**比漏报更贵**。 */
+  const p20 = pairRunWithLedger([ { id: A, status: 'ACCEPTED', t: T } ],
+    [ { t: T - 10 * 60000, exit: 2, ok: 7, fail: 0, drift: 0, unver: 2 } ], A,
+    { now: T + 60000 });
+  check('20 账本行早于记录 10 分钟 -> 仍 OK（左边界够宽，不制造假红）',
+    { state: p20.state, 早: p20.deltaMs < 0 }, { state: 'OK', 早: true });
+
+  /* ---- 21 · 左边界外：早 16 分钟 -> FAIL（窗口不能无限宽） ---- */
+  const p21 = pairRunWithLedger([ { id: A, status: 'ACCEPTED', t: T } ],
+    [ { t: T - 16 * 60000, exit: 2, ok: 7, fail: 0, drift: 0, unver: 2 } ], A,
+    { now: T + 60000 });
+  check('21 账本行早于记录 16 分钟 -> FAIL（左边界外）',
+    { state: p21.state, cand: p21.cand }, { state: 'FAIL', cand: 0 });
+
+  /* ---- 22 · 窗口内多行候选时，取**最接近运行时刻**的那一行 ----
+   * 我手动跑一次也会写一行账本 —— 取最后一行会取到不相干的那次。 */
+  const p22 = pairRunWithLedger([ { id: A, status: 'ACCEPTED', t: T } ], [
+    { t: T - 3 * 60000, exit: 2, ok: 7, fail: 0, drift: 0, unver: 2 },
+    { t: T + 5 * 60000, exit: 0, ok: 9, fail: 0, drift: 0, unver: 0 },
+    { t: T + 2 * 60000, exit: 1, ok: 3, fail: 1, drift: 0, unver: 0 },
+  ], A, { now: T + 60000 });
+  check('22 多候选时取最接近运行时刻的那一行',
+    { state: p22.state, cand: p22.cand, exit: p22.line && p22.line.exit },
+    { state: 'OK', cand: 3, exit: 1 });
+  /* ---- 23..30 · 因果链（2026-09-15 加） ----
+   * 时间窗口配对只能证明「那一刻**有人**跑过 acceptance」，证明不了**是这一轮 automation 跑的**。
+   * 而这条很重要：我的规矩是「会话第一件事跑 acceptance」，若人正好在日报落盘前后手动跑一次，
+   * 两条时间线会落在同一个 ±15 分钟窗口里 —— [98] 会给假 OK，盖住「日报根本没执行命令」。
+   * 宿主把 `sessionId` 写进了运行记录，那一轮的会话日志里记着它执行过的命令 —— 用它把
+   * 「同时发生」升级成「就是它」。 */
+  const RUN = { id: A, status: 'ACCEPTED', t: T, sessionId: 'S1', finishedAt: T + 4 * 60000 };
+  const L = (t) => ({ t, exit: 2, ok: 7, fail: 0, drift: 0, unver: 2 });
+  const CMD = { t: T, cmd: 'cd x && node .check/acceptance.js', done: true };
+
+  /* `null` 与 `[]` 必须分开：「读不到」是没信息（第三态），「读到了但没那条命令」是没执行。
+   * 压成一种，就会把「没测」读成「没跑」—— 同一个坑第三次出现。 */
+  const c23 = causalPair(RUN, null, [L(T + 4 * 60000)]);
+  check('23 会话日志读不到 -> UNVERIFIED（**没信息**，不等于「没执行」）',
+    { state: c23.state, 因果没确认: /因果没确认/.test(c23.why), 没执行: /没有执行/.test(c23.why) },
+    { state: 'UNVERIFIED', 因果没确认: true, 没执行: false });
+
+  const c24 = causalPair(RUN, [], [L(T + 4 * 60000)]);
+  check('24 会话日志里没有那条命令 -> FAIL（确实没执行；与「执行了但崩了」查的方向不同）',
+    { state: c24.state, 没有执行: /没有执行/.test(c24.why) },
+    { state: 'FAIL', 没有执行: true });
+
+  const c25 = causalPair(RUN, [CMD], [L(T + 4 * 60000)]);
+  check('25 会话里执行过 + 账本在命令后 4 分钟 -> OK 且**因果已确认**',
+    { state: c25.state, causal: c25.causal, deltaMin: Math.round(c25.deltaMs / 60000) },
+    { state: 'OK', causal: true, deltaMin: 4 });
+
+  const c26 = causalPair(RUN, [CMD], [L(T + 40 * 60000)]);
+  check('26 账本在命令后 40 分钟 -> FAIL（上界 30 分钟外）',
+    { state: c26.state, 没跑到收尾: /没跑到收尾/.test(c26.why) },
+    { state: 'FAIL', 没跑到收尾: true });
+
+  const c27 = causalPair(RUN, [CMD], [L(T - 1000)]);
+  check('27 账本**早于**命令 1 秒 -> FAIL（下界不许提前：账本只能写在命令之后）',
+    { state: c27.state }, { state: 'FAIL' });
+
+  const c28 = causalPair(RUN,
+    [CMD, { t: T + 60 * 60000, cmd: 'node .check/acceptance.js', done: true }],
+    [L(T + 64 * 60000)]);
+  check('28 执行过两次时配**最近**那一次（不是第一次）',
+    { state: c28.state, deltaMin: Math.round(c28.deltaMs / 60000) },
+    { state: 'OK', deltaMin: 4 });
+
+  /* 会话日志里的时间戳是**不带引号的毫秒数**，daemon.log 里是**带引号的 ISO 串**。
+   * 只认一种，另一种会静默返回 null，而 null 会被当成「配不上」。 */
+  check('29 parseHostTs 认两种时间戳形状（ISO 串 / 毫秒数）',
+    { iso: parseHostTs('{"timestamp":"2026-09-15T06:34:43.244Z","x":1}'),
+      num: parseHostTs('"toolName":"Bash"},"timestamp":1789460429022,"_meta":{') },
+    { iso: Date.parse('2026-09-15T06:34:43.244Z'), num: 1789460429022 });
+
+  check('30 跨天那一轮能算出自己的日期目录（会话日志按日期分目录）',
+    { d: dayOf(Date.parse('2026-09-15T17:30:00+08:00')) }, { d: '2026-09-15' });
+
+  /* ---- 31 · `sdk/conversations/` **必须**被扫到 ----
+   * 2026-09-15 实测：automation 那一轮的会话日志在 `logs/<日期>/sdk/conversations/`，
+   * **不在顶层**；而 `[HookExecutor] spawn` 在那个文件里也出现。
+   * 漏掉它的后果不是「少看一点」：[99] 说的是一句**否定**（「宿主从未 spawn 过它」），
+   * 而否定的强度不能超过证据的覆盖范围。这条是那个覆盖缺口的守门人。 */
+  /* 路径分隔符用**正斜杠**：真实日志里 hook 是 `.check/hook-post-edit.js`
+   * （第一次写这条用例我全用了反斜杠，于是 `.check/` 这个特征子串根本不在行里 ——
+   * 用例自己就构不造成立条件，跑了也是假绿。**写用例先确认特征串真的出现。**） */
+  mk(ROOT4, path.join(dayOf(Date.now()), 'sdk', 'conversations', 'sess-1.log'),
+    logline(new Date().toISOString(),
+      '[HookExecutor] spawn cmd=node C:/Users/x/.check/hook-post-edit.js'));
+  const s31 = scanHostLogs(ROOT4);
+  check('31 扫到 sdk/conversations/ 里的会话日志（覆盖缺口守门人）',
+    { ok: s31.ok, mine: s31.mine, complete: s31.complete },
+    { ok: true, mine: 1, complete: true });
+
+  /* ---- 32 · 假阳性守门人：被检验者的**输出**不许被当成宿主的行为 ----
+   * 加扫 conversations 之后 [99] 立刻报 `mine=2`，看着像「hook 终于被调了」。
+   * 实际那一行里：`.check/` 来自**提示词**，`[HookExecutor] spawn` 来自
+   * **acceptance.js 自己打印的 [99] 明细** —— 判据读到了被检验者写的话。
+   * 所以只认真形状 `spawn … cmd=…/.check/…`，且 `.check/` 必须在 `cmd=` **之后**。 */
+  mk(ROOT4, path.join(dayOf(Date.now()), 'sdk', 'conversations', 'sess-2.log'), [
+    logline(new Date().toISOString(),
+      '[99] hook 被宿主调用 UNVERIFIED 宿主侧 spawn 含 `.check/` 共 0 次' +
+      '（其中 [HookExecutor] spawn 271 次）· node .check/acceptance.js'),
+    logline(new Date().toISOString(),
+      '[HookExecutor] spawn pid=1 shell=bash timeout=5000ms cmd=bash ' +
+      '"/c/Users/x/.workbuddy-ai/plugins/cache/foo/1.0.0/hook.js"'),
+  ].join('\n') + '\n');
+  const s32 = scanHostLogs(ROOT4);
+  check('32 同一行里两个串都有但不合真形状 -> **不计数**（自指污染守门人）',
+    { spawn: s32.spawnTotal, mine: s32.mine },
+    { spawn: 2, mine: 1 });   /* 2 = 上面这条真的 + 31 那条真的；假的那条不算 */
+
+  /* ---- 36 · **假阴性**守门人：路径分隔符 ----
+   * 2026-09-15 实测翻案：宿主真 spawn 过我们的 hook **129 次**，命令里是
+   * `C:\Users\…\.check\immunity-hook.js`（**反斜杠**）。判据只认 `.check/`（正斜杠），
+   * 于是一条都没认出来 —— `[99]` 报「宿主从未 spawn 过它」，而这个结论被写进了
+   * SOUL / MEMORY / VERIFY 三处。**漏判比误判更贵**：误判报红会被查，漏判报「没有」会被信。
+   * 所以 Windows 与 POSIX 两种分隔符都必须认。 */
+  mk(ROOT4, path.join(dayOf(Date.now()), 'sdk', 'conversations', 'sess-3.log'),
+    logline(new Date().toISOString(),
+      '[HookExecutor] spawn pid=2 shell=bash timeout=60000ms cmd=' +
+      '"C:\\Users\\x\\node.exe" "C:\\Users\\x\\.workbuddy-ai\\.check\\immunity-hook.js"'));
+  const s36 = scanHostLogs(ROOT4);
+  check('36 Windows 反斜杠路径的 hook spawn **必须**被计入（假阴性守门人）',
+    { spawn: s36.spawnTotal, mine: s36.mine }, { spawn: 3, mine: 2 });
+
+  /* ---- 33..35 · `[98]` 的**展示层**（combinePair）----
+   * 这段只有等日报真的跑过一次才会被执行到 —— **没跑过的代码崩起来是一行结论都没有**
+   * （TDZ 那次已经领教过：ReferenceError → 整条命令一行不打、退出码 1）。
+   * 所以把它提成纯函数在这里跑掉。 */
+  const P_OK = { state: 'OK', run: RUN, line: L(T + 4 * 60000), cand: 1, deltaMs: 4 * 60000, why: '' };
+  const Q_OK = { state: 'OK', causal: true, cmd: CMD, line: L(T + 4 * 60000), cand: 1, deltaMs: 240000, why: '' };
+  const Q_UNV = { state: 'UNVERIFIED', causal: false, why: '拿不到会话日志' };
+  const Q_FAIL = { state: 'FAIL', causal: true, why: '会话里没有执行那条命令' };
+
+  const k33 = combinePair(P_OK, Q_OK);
+  check('33 因果成立时 -> state 取因果那条，且明细写明「因果已确认」',
+    { state: k33.state, 因果已确认: /因果已确认/.test(k33.causalTxt), 命令执行: /命令执行/.test(k33.pairTxt) },
+    { state: 'OK', 因果已确认: true, 命令执行: true });
+
+  const k34 = combinePair(P_OK, Q_UNV);
+  check('34 因果没确认 -> **退回**时间窗口，且 why 里**两个都讲**（不许只报一个）',
+    { state: k34.state, 因果未确认: /因果未确认/.test(k34.causalTxt),
+      退回: /时间窗口配对/.test(k34.why), 拿不到: /拿不到会话日志/.test(k34.why) },
+    { state: 'OK', 因果未确认: true, 退回: true, 拿不到: true });
+
+  const k35 = combinePair(P_OK, Q_FAIL);
+  check('35 因果那条是 FAIL -> 不许被时间窗口的 OK 盖掉（弱证据不许顶掉强结论）',
+    { state: k35.state, 没有执行: /没有执行/.test(k35.why) },
+    { state: 'FAIL', 没有执行: true });
+
+  /* ---- 8 · findHookTrace 指针链（[99] 自述那侧的落点） ----
+   * 2026-09-15 翻案的直接原因：`[99]` 一直读 `.check/hook.log`（0 行），
+   * 而真正的落点在别处。**读错落点 = 拿「读不到」当「没发生」**，形状与 `src=host` 那次一致。
+   * 所以落点不许写死，走指针链 —— 链本身也要有守门，否则哪天被搬走又会静默变 0。 */
+  const HOOKJS = path.join(ROOT4, '.check', 'immunity-hook.js');
+  const TRACEF = path.join(ROOT4, 'immunity', 'host-hook-spawns.log');
+  const esc2 = (s) => s.replace(/\\/g, '\\\\');   // 真实脚本里 TRACE 是转义过的反斜杠
+  mk(ROOT4, 'settings.json', JSON.stringify({
+    hooks: { PostToolUse: [{ matcher: 'Write|Edit', hooks: [{ type: 'command',
+      command: '"C:\\node.exe" "' + HOOKJS + '"' }] }] } }));
+  /* fixture 用**当前真相的形状**（`process.env.IMMUNITY_TRACE || '…'`）。
+   * 2026-09-15 就是这里没跟上：hook 的 TRACE 改成可覆盖之后，解析正则还认旧形状，
+   * `[99]` 当场 FAIL「spawn 了但没产出」。**用例的形状必须跟代码一起改。** */
+  mk(ROOT4, '.check/immunity-hook.js',
+     "const TRACE = process.env.IMMUNITY_TRACE\n  || '" + esc2(TRACEF) + "';\n");
+  mk(ROOT4, 'immunity/host-hook-spawns.log', [
+    'ts=2026-09-15T08:00:00.000Z pid=1 verdict=ok fp=/a rc=0',
+    'ts=2026-09-15T08:00:01.000Z pid=2 verdict=non-clean:rc=2 fp=/b rc=2',
+    'ts=2026-09-15T08:00:02.000Z pid=3 verdict=bad-json input_len=0 rc=0',
+  ].join('\n') + '\n');
+
+  const trA = findHookTrace(ROOT4);
+  const mTs = trA.last ? /ts=(\S+)/.exec(trA.last) : null;
+  /* 这个 fixture 里恰好三行齐全：`ok` / `non-clean:rc=2` / `bad-json` ——
+   * 于是 `unchecked`（没走到检查）= 1、`incomplete`（检查没跑完）= 1，两边都能被断言到。 */
+  check('37 指针链 settings.json -> hook 脚本 -> TRACE 能解出落点，且 verdict 分形状计数',
+    { path: trA.path, n: trA.n, ok: trA.verdicts.ok, nonclean: trA.verdicts['non-clean:rc=2'],
+      badjson: trA.verdicts['bad-json'], rcNonZero: trA.rcNonZero, lastTs: mTs && mTs[1],
+      unchecked: trA.unchecked, incomplete: trA.incomplete },
+    { path: esc2(TRACEF), n: 3, ok: 1, nonclean: 1, badjson: 1, rcNonZero: 1,
+      lastTs: '2026-09-15T08:00:02.000Z', unchecked: 1, incomplete: 1 });
+
+  /* 链断了必须**报出来**，不许静默返回 n=0 —— 静默的 0 会被读成「hook 从没跑过」。 */
+  mk(ROOT4, '.check/immunity-hook.js', 'const NOTHING = 1;\n');
+  const trB = findHookTrace(ROOT4);
+  check('38 脚本里没有 TRACE -> 给 why，不许静默 n=0（静默的 0 会被读成「没发生」）',
+    { path: trB.path, n: trB.n, 有why: !!trB.why },
+    { path: null, n: 0, 有why: true });
+
+  /* **两种形状都要认**。解析器只认一种形状 = 换个写法就静默变 0，
+   * 而静默的 0 会被下游读成「hook 从没跑过」。向后兼容不是「顺手」：
+   * 脚本可能被回滚、被重装成旧版，判据不能跟着一起烂。 */
+  mk(ROOT4, '.check/immunity-hook.js', "const TRACE = '" + esc2(TRACEF) + "';\n");
+  const trC = findHookTrace(ROOT4);
+  check("47 旧形状（裸字面量 `TRACE = '…'`）也要能认 —— 解析器不许只认一种形状",
+    { path: trC.path, n: trC.n }, { path: esc2(TRACEF), n: 3 });
+
+  /* ---- 39-42：宿主退出码 ↔ hook 自述 verdict 的**交叉核对**（2026-09-15 加） ----
+   * 为什么要自测：真实环境里「宿主 > 自述」这一支**等不到**（那是异常），
+   * 而它恰恰是这条判据存在的理由 —— 走不到的分支和不存在的分支，在验收表上长得一样。
+   * 判据的依据：宿主记 `[HookExecutor] abnormal exit … code=1`，而 `code=1` 是「命中」的退出码。 */
+  const hx = (codes) => ({ hookExitCodes: codes || {} });
+  const vt = (verdicts) => ({ verdicts: verdicts || {} });
+
+  check('39 交叉核对：宿主 code=1 ×1 ↔ 自述 hit×1 → 一致',
+    { state: crossCheckHookExit(hx({ 1: 1 }), vt({ hit: 1 })).state }, { state: 'OK' });
+
+  check('40 ★交叉核对：宿主 code=1 ×2 而自述 hit×1 → 必须 FAIL（自述漏了，信宿主）',
+    { state: crossCheckHookExit(hx({ 1: 2 }), vt({ hit: 1 })).state }, { state: 'FAIL' });
+
+  check('41 交叉核对：宿主窗口内 0 次、自述有 → 不判红，且要说明「窗口不一样大」',
+    (() => { const r = crossCheckHookExit(hx({}), vt({ hit: 3 }));
+      return { state: r.state, 提到窗口: /窗口/.test(r.why) }; })(),
+    { state: 'OK', 提到窗口: true });
+
+  check('42 交叉核对：两侧都 0 → 无提示（没异常时不许刷提示）',
+    (() => { const r = crossCheckHookExit(hx({}), vt({}));
+      return { state: r.state, 有why: !!r.why }; })(),
+    { state: 'OK', 有why: false });
+
+  /* ---- 43-46：`judgeHookTrace` —— 「有产出」不等于「检查了」（2026-09-15 加） ----
+   * 为什么必须单独判这一条：`no-file-path` / `bad-json` / `no-payload` / `stdin-error`
+   * 四种形状**会让行数变多**。宿主若改了 payload 形状（matcher 里就写着 `MultiEdit`，
+   * 而 MultiEdit 递的是 `edits` 数组、没有 `file_path`），所有编辑都会变 `no-file-path`
+   * → 行数暴涨 → 旧判据只看 `tr.n > 0` → **报 OK**。**全量漏检而验收全绿。**
+   * 走不到的分支和不存在的分支，在验收表上长得一样 —— 所以这里必须自己喂进去。 */
+  check('43 ★漏检判定：unchecked×2（no-file-path）→ 必须 FAIL，且 why 要点出形状',
+    (() => { const r = judgeHookTrace(hx({}),
+        { unchecked: 2, uncheckedKinds: { 'no-file-path': 2 } });
+      return { state: r.state, 点出形状: /no-file-path/.test(r.why) }; })(),
+    { state: 'FAIL', 点出形状: true });
+
+  check('44 ★漏检判定：incomplete×1（non-clean:rc≠0）→ 必须 FAIL（检查没跑完 ≠ 通过）',
+    { state: judgeHookTrace(hx({}), { incomplete: 1 }).state }, { state: 'FAIL' });
+
+  check('45 漏检判定：两类都 0 时**委托**给交叉核对（宿主 code=1 ×2 > 自述 hit×1 → FAIL）',
+    { state: judgeHookTrace(hx({ 1: 2 }), vt({ hit: 1 })).state }, { state: 'FAIL' });
+
+  check('46 漏检判定：两类都 0 且账目一致 → OK',
+    { state: judgeHookTrace(hx({ 1: 1 }), vt({ hit: 1 })).state }, { state: 'OK' });
+
+  /* ---- 48-52：`findSessionAcceptanceRuns` / `parseWorkspaceTs` / `cmdRunsAcceptance` ----
+   * 【2026-09-16 加，补 ISS-051 修法的**残留**】
+   * 为什么必须补：`findSessionAcceptanceRuns` 原先在这 47 条里**连 import 都没有**
+   * —— **零覆盖**。而「对 automation 结构性必然 FAIL」那个假红就出在它身上：
+   * 它读错了通道（ACP 协议流里根本不记工具调用），恒返回 `[]`，
+   * 被上层读成「**没有执行**」。**没被跑过的取数层，就是缺陷的温床。**
+   * 这三条把它的**三种返回值**（数组 / [] / null）逐个钉住。 */
+  const DAY5 = '2099-01-02', DAY5B = '2099-01-03', DAY5C = '2099-01-04';
+  const sidX = 'cccc1111-2222-3333-4444-555555555555';
+  const sidY = 'dddd1111-2222-3333-4444-555555555555';
+  /* 工作区级日志的真形状：首行 `Workspace Path:`（预筛靠它）；
+   * sessionId **只在** `[SessionRunStateMachine]` 行；命令行在 `[BashTool] execute start`。 */
+  const wsLog = (sids, cmds) => {
+    let s = 'Workspace Path: C:\\tmp\\ws\n';
+    for (const sid of sids) {
+      s += '[16/9/2026 上午9:08:07.000] [Info] [pid=1] [SessionRunStateMachine] transition | ' +
+        'sessionId=' + sid + ' | event=TOOL_STARTED | from=model_done | to=tool_executing | toolName=Bash\n';
+    }
+    for (const c of cmds) {
+      s += '[16/9/2026 上午9:08:07.359] [Info] [pid=1] [BashTool] execute start | command="' +
+        c.split('"').join('\\"') + '" | timeout=undefined\n';
+    }
+    return s;
+  };
+  /* 被执行的目标脚本，内容含 acceptance.js —— 指针链要能顺下去。 */
+  mk(ROOT5, 'audit.sh', '#!/bin/sh\n( cd "$ROOT" && node .check/acceptance.js 2>&1 )\n');
+  const hr = (s) => { const t = parseWorkspaceTs(s); return t === null ? null : new Date(t).getHours(); };
+  check('48 parseWorkspaceTs 认工作区日志的时间戳（12 小时制 + 中文上下午）',
+    { 上午9: hr('[16/9/2026 上午9:08:07.359] x'),
+      下午3: hr('[16/9/2026 下午3:30:00.000] x'),
+      下午12: hr('[16/9/2026 下午12:05:00.000] x'),
+      上午12: hr('[16/9/2026 上午12:05:00.000] x'),
+      认不出: parseWorkspaceTs('2026-09-16T01:08:07.359Z') },
+    { 上午9: 9, 下午3: 15, 下午12: 12, 上午12: 0, 认不出: null });
+
+  check('49 cmdRunsAcceptance 只认「执行」，不认「读」也不认「提到」（子串判断会在这里出错）',
+    { 直接: cmdRunsAcceptance('cd /x && node .check/acceptance.js 2>&1', ROOT5),
+      指针链: cmdRunsAcceptance('cd /x && bash audit.sh; echo 1', ROOT5),
+      读文件: cmdRunsAcceptance('cd /x && grep -n "exitCode" .check/acceptance.js | tail -25', ROOT5),
+      提到: cmdRunsAcceptance('echo "见 .check/acceptance.js"', ROOT5),
+      脚本不在: cmdRunsAcceptance('cd /x && bash nope.sh', ROOT5) },
+    { 直接: true, 指针链: true, 读文件: false, 提到: false, 脚本不在: false });
+
+  mk(ROOT5, 'logs/' + DAY5 + '/.ws__a.log', wsLog([sidX], ['cd /x && bash audit.sh; echo 1']));
+  const f1 = findSessionAcceptanceRuns(path.join(ROOT5, 'logs'), DAY5, sidX, null);
+  check('50 ★单会话 + `bash audit.sh`（脚本内含 acceptance）→ **命中**，且时间解析得出',
+    { 是数组: Array.isArray(f1), 条数: f1 ? f1.length : null,
+      有t: !!(f1 && f1[0] && Number.isFinite(f1[0].t)) },
+    { 是数组: true, 条数: 1, 有t: true });
+
+  mk(ROOT5, 'logs/' + DAY5B + '/.ws__b.log',
+    wsLog([sidX], ['cd /x && grep -n "exitCode" .check/acceptance.js | tail -25']));
+  const f2 = findSessionAcceptanceRuns(path.join(ROOT5, 'logs'), DAY5B, sidX, null);
+  check('51 ★只有 `grep … acceptance.js`（**读**）→ 返回 []（不是 null、也不是命中）',
+    { 是数组: Array.isArray(f2), 条数: f2 ? f2.length : null },
+    { 是数组: true, 条数: 0 });
+
+  mk(ROOT5, 'logs/' + DAY5C + '/.ws__c.log', wsLog([sidX, sidY], ['cd /x && bash audit.sh']));
+  const f3 = findSessionAcceptanceRuns(path.join(ROOT5, 'logs'), DAY5C, sidX, null);
+  check('52 ★该文件里 sessionId **不唯一**（并发）→ 返回 null（归属不了，宁可说不知道）',
+    { 值: f3 }, { 值: null });
+} catch (e) {
+  console.log('FAIL  自测自身抛错：' + e.message);
+  fail++;
+} finally {
+  /* 清理尽力而为 —— 沙箱可能拦批量删除。
+   * **删不掉不算失败**（那是「未验证」，不是「不通过」），所以这里不检查返回值。 */
+  for (const d of [ROOT, ROOT2, ROOT3, ROOT4, ROOT5]) {
+    try { fs.rmSync(d, { recursive: true, force: true }); } catch (e) { /* 未验证，不报失败 */ }
+  }
+}
+
+console.log('----');
+console.log('自测 ' + (pass + fail) + ' 条：命中 ' + pass + ' / 失败 ' + fail);
+process.exit(fail ? 1 : 0);

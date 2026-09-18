@@ -1,0 +1,445 @@
+#!/usr/bin/env node
+'use strict';
+/* probe-crossref.js —— 「跨物对照」判据（**新文件，不动任何冻结件**，DEC-031）
+ *
+ * 主题（一个，不是五个）：**A 与 B 的关系有没有被写下来。**
+ * 起源：七项待裁决里 5 项是同一个形状 —— 两样东西相邻，中间缺一张显式对照表。
+ *   X1 ← ISS-043  数字 `2` ↔ 含义（验收类 DRIFT/UNVERIFIED vs 测试类拒跑）
+ *   X2 ← ISS-035  三态 ↔ 五态（子代理回传 vs 主代理输出）
+ *   X3 ← ISS-026  协议**要求产出**的文件 ↔ 检查面
+ *   X4 ← CHG-025  常量（冻结 md5）↔ 指针（file-history）
+ *   （X5 ← ISS-025 见 `--report` 里的口径自检，只报告）
+ *
+ * ★ 判据不问「A 对不对」「B 对不对」，只问「A↔B 的关系有没有被写下来」。
+ *   所以每一条都**可机械判定**，且**不预设哪一边是对的**。
+ *
+ * 模式：
+ *   --report  只报告命中与样本，**不判红、rc 恒 0**（定规则之前先量误伤，automation §三 铁律）
+ *   --scan    判定（默认），命中即 rc=1；豁免逐条打印；悬空豁免 rc=2
+ *   --inject  双向测：注入向量必须被抓、反向向量必须干净、计数自检
+ *
+ * 退出码：0 合规 / 1 命中 / 2 拒跑（参数或环境不自洽）
+ */
+const fs = require('fs');
+const path = require('path');
+
+const HOME = path.resolve(__dirname, '..');
+const REC = path.join(HOME, '.check', 'record');
+const EXEMPT = path.join(REC, 'crossref-exemptions.md');
+const BASELINE = path.join(REC, 'crossref-baseline.json');
+
+/* 检查面：**活工具**。历史归档（applied / audit / evidence / tmp）与记录正文（*.md）不进面 ——
+ * 理由同 fileset.js 的 FROZEN：把历史并进来只会把「当时就是那样」报成缺陷（假红）。 */
+const SKIP = [
+  /^\.check\/applied\//,
+  /^\.check\/audit\//,
+  /^\.check\/record\/evidence\//,
+  /^\.check\/record\/exemptions\//,
+  /^\.check\/tmp\//,
+  /^\.check\/_battery-tmp/,
+  /^\.check\/record\/[^/]+\.md$/,
+];
+
+function walk(dir, out) {
+  let ents;
+  try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return out; }
+  for (const e of ents) {
+    const p = path.join(dir, e.name);
+    const rel = path.relative(HOME, p).split(path.sep).join('/');
+    if (e.isDirectory()) {
+      if (/^(node_modules|\.git|file-history|logs)$/.test(e.name)) continue;
+      walk(p, out);
+    } else if (/\.(js|sh)$/.test(e.name)) {
+      if (SKIP.some((x) => x.test(rel))) continue;
+      out.push({ rel, abs: p });
+    }
+  }
+  return out;
+}
+
+function liveFiles() {
+  const out = [];
+  walk(path.join(HOME, '.check'), out);
+  walk(path.join(HOME, 'skills'), out);
+  return out;
+}
+
+/* 基线：X3 的各日期 evidence 文件数 + X4 的 changes.md 最大已判 CHG 号。
+ * 存在理由同 `id-collision-exemptions.md`：**历史 append-only，判据不能把它们永远报红**
+ * （永远红的断言会被训练成忽略，DEC-019）。基线一挪，只有**新写的行**受判。 */
+function readBaseline() {
+  if (!fs.existsSync(BASELINE)) return null;
+  try { return JSON.parse(fs.readFileSync(BASELINE, 'utf8')); } catch (e) { return null; }
+}
+
+/* 豁免表：`EXEMPT <规则> <路径>:<行> <原因>`。粒度是 (规则, 位置)，不是整文件。 */
+function loadExempt() {
+  if (!fs.existsSync(EXEMPT)) return { list: [], raw: 0 };
+  const list = [];
+  for (const l of fs.readFileSync(EXEMPT, 'utf8').split('\n')) {
+    const m = /^EXEMPT\s+(X\d)\s+(\S+)\s+(.+)$/.exec(l.trim());
+    if (m) list.push({ rule: m[1], at: m[2], why: m[3] });
+  }
+  return { list, raw: list.length };
+}
+
+/* ------------------------------------------------------------------ 规则实现 */
+
+/* X1 · 退出码语义必须**就地声明**（ISS-043）
+ * 「2」在验收类工具里是 DRIFT/UNVERIFIED，在测试类工具里是拒跑 —— 两套都合法。
+ * 所以判据不是「统一它」，而是「**每一处都写清楚它是哪一套**」。
+ * 判法：`exit 2` / `process.exit(2)` 所在行 ±3 行内必须出现语义词。 */
+/* X1 · 退出码语义必须**有一处显式登记**（ISS-043）
+ * 「2」在验收类工具里是 DRIFT/UNVERIFIED，在测试类工具里是拒跑 —— 两套都合法。
+ * 所以判据不是「统一它」，而是「**每一处都写清楚它是哪一套**」。
+ *
+ * ★ 测量出来的第一个修正：第一版要求「每处 exit 2 附近有语义词」→ 命中 13 处，横跨 3 个 skill，
+ *   而且其中多数**本来就写了**（「用法」「拒绝在错的根上产出」「基线不干净，先停」），
+ *   只是我的词表太窄 → **假红**。逐处加注释要动 16 个文件、跨 3 个 skill，改动面太大。
+ *   → 改成**登记制**：`2` 的语义写在**一处**（`.check/record/exit-codes.md`），
+ *     判据只问「**这个文件登记了没有**」。一处显式对照 > 十六处就地注释（同 fileset.js 的理由）。
+ *
+ * ★ 测量出来的第二个修正：**注释里的 `exit 2` 不是退出码**。`verify-ledger.js:13` 是块注释里的
+ *   文档行（不以 `*` 开头，所以按行首判注释会漏）→ 必须**先剥注释再判**。
+ */
+const X1_RE = /(^|[^0-9A-Za-z_.])exit\s+2\b|\.exit\(2\)/;
+
+/* 剥掉块注释与行注释（含 shell 的 `#`）。判的是**代码**，不是文档。 */
+function stripComments(src, isSh) {
+  let s = src.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  s = s.replace(/^[ \t]*\/\/.*$/gm, ' ');
+  s = s.replace(/^[ \t]*\*.*$/gm, ' ');
+  if (isSh) s = s.replace(/^[ \t]*#.*$/gm, ' ');
+  return s;
+}
+
+/* 登记表：`.check/record/exit-codes.md`，表格里出现 `` `路径` `` 的行即视为已登记。 */
+function loadExitTable() {
+  const f = path.join(REC, 'exit-codes.md');
+  const map = new Map();
+  if (!fs.existsSync(f)) return map;
+  for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
+    if (!l.trim().startsWith('|')) continue;
+    const m = /^\|\s*`([^`]+)`/.exec(l.trim());
+    if (m) map.set(m[1], l.trim());
+  }
+  return map;
+}
+
+function x1(files) {
+  const reg = loadExitTable();
+  const hits = [];
+  const present = new Set();
+  for (const f of files) {
+    const src = stripComments(fs.readFileSync(f.abs, 'utf8'), /\.sh$/.test(f.rel));
+    if (!X1_RE.test(src)) continue;
+    present.add(f.rel);
+    if (!reg.has(f.rel)) hits.push({ at: f.rel, txt: '含 `exit 2` 但未在 exit-codes.md 登记它的语义' });
+  }
+  const dangling = [];
+  for (const k of reg.keys()) if (!present.has(k)) dangling.push({ at: 'exit-codes.md ' + k, txt: '登记了但该文件已不含 `exit 2`（悬空登记，必须删）' });
+  return { seen: present.size, hits, dangling, regSize: reg.size };
+}
+
+/* X2 · 三态 ↔ 五态必须有一处对照声明（ISS-035）
+ * 判法：`event-protocol.md` 里出现「三态」的每一行，其 ±3 行内必须出现对照词
+ * （`输出形态` / `SKILL.md` / `ASK` / `PROGRESS`）—— 即「说明这是两件事」。 */
+const X2_WORDS = /输出形态|SKILL\.md|ASK|PROGRESS|五态/;
+
+function x2() {
+  const f = path.join(HOME, 'skills', 'andyngo', 'references', 'andyngo-event-protocol.md');
+  if (!fs.existsSync(f)) return { seen: 0, hits: [], missing: true };
+  const L = fs.readFileSync(f, 'utf8').split('\n');
+  const hits = [];
+  let seen = 0;
+  L.forEach((line, i) => {
+    if (!/三态/.test(line)) return;
+    seen++;
+    const win = L.slice(Math.max(0, i - 3), i + 4).join(' ');
+    if (!X2_WORDS.test(win)) hits.push({ at: 'references/andyngo-event-protocol.md:' + (i + 1), txt: line.trim().slice(0, 72) });
+  });
+  return { seen, hits, missing: false };
+}
+
+/* X3 · 协议**要求产出**的文件必须在检查面里可见（ISS-026）
+ * 判法：`evidence/` 各日期目录（**递归**）的文件数**只增不减**（对比基线），且每个文件非空。
+ * 只判这两条 —— **不要求命名合规**（协议自己要求它们叫 `<原名>.pre-<slug>-<hhmmss>`）。
+ * ★ 测量出来的第二个修正：**必须递归且只数普通文件**。第一版把子目录 `_superseded` 当成
+ *   文件、`statSync().size` 在目录上返回 0 → 报「0 字节（归档件损坏）」= **纯假红**。
+ *   「目录的 size 是 0」是平台行为，不是损坏。 */
+function listFiles(dir, out) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) listFiles(p, out);
+    else if (e.isFile()) out.push(p);
+  }
+  return out;
+}
+
+function x3() {
+  const base = path.join(REC, 'evidence');
+  if (!fs.existsSync(base)) return { seen: 0, hits: [], dirs: {} };
+  const cur = {};
+  for (const d of fs.readdirSync(base, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue;
+    const files = listFiles(path.join(base, d.name), []);
+    cur[d.name] = files.length;
+    for (const p of files) {
+      if (fs.statSync(p).size === 0) {
+        cur[d.name + '::' + path.relative(base, p).split(path.sep).join('/')] = -1;
+      }
+    }
+  }
+  let known = null;
+  if (fs.existsSync(BASELINE)) {
+    try { known = JSON.parse(fs.readFileSync(BASELINE, 'utf8')).evidence; } catch (e) { known = null; }
+  }
+  const hits = [];
+  for (const [k, v] of Object.entries(cur)) {
+    if (v === -1) { hits.push({ at: 'evidence/' + k.split('::')[0] + '/' + k.split('::')[1], txt: '**0 字节**（归档件损坏或写入中断）' }); continue; }
+    if (known && typeof known[k] === 'number' && v < known[k]) {
+      hits.push({ at: 'evidence/' + k, txt: '文件数 ' + v + ' < 基线 ' + known[k] + '（归档件消失？）' });
+    }
+  }
+  return { seen: Object.keys(cur).length, hits, dirs: cur };
+}
+
+/* X4 · **新增**的 CHG 行第 2 字段必须是合规 ts（ISS-043 家族的意外收获）
+ *
+ * ★ 测量出来的第三个修正（**两次**）：
+ *   第一版：`凡有 md5 的行都要有指针` → 命中 **47/61（77%）**，全部是「改前/改后 md5」这个**格式字段** → 废。
+ *   第二版：收紧到「声称不变」的词表（冻结/永久/不变/以此为准/锁定）→ 命中 12 条，但抽样 6 条里
+ *     `永久 UNVERIFIED` · `行数不变` · `永久红` **三条都是普通叙述** → **假红率 ≈ 50%，不可判红**。
+ *     **结论：「哪条 md5 是不变式」在文本层面与普通叙述同形 —— 这条做不成判据（量出来的负面结果）。**
+ *   第三版（本版）：改判**机械确定**的东西 —— **CHG 行的第 2 字段必须是 ts**。
+ *     成因：`eventlog` 有 I4 管 ts，而 `changes.md` **没有任何判据管**（`probe-record-shape.js` 只查
+ *     前缀+3位号+字段数下限 9，缺 ts 的行照样 ≥9 字段 → **全绿通过**）。
+ *     实测：**CHG-073 … CHG-082 共 10 行第 2 字段直接是文件路径**；CHG-072 是 `…T02:02:00Z`（**带了秒**）。
+ *     **危害是具体的**：任何 `awk '{print $2}'` 取时间戳的脚本会拿到一个路径 ——
+ *     本探针自己的第一版就因此把 md5 当成了路径（`GONE` 4 条假象）。
+ *
+ * 判法：**id > 基线的行才判**（历史 11 条 append-only、不可修 → 只报告不判红，避免训练人忽略红色）。 */
+const X4_TS = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}Z$/;
+
+function x4() {
+  const f = path.join(REC, 'changes.md');
+  if (!fs.existsSync(f)) return { seen: 0, hits: [], note: '' };
+  const base = readBaseline();
+  const maxId = base && base.changesMaxId ? Number(String(base.changesMaxId).slice(4)) : 0;
+  const hits = [];
+  let seen = 0, histBad = 0;
+  for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
+    const m = /^CHG-(\d{3}) /.exec(line);
+    if (!m) continue;
+    const id = Number(m[1]);
+    const f2 = line.split(' ')[1] || '';
+    const ok = X4_TS.test(f2);
+    if (id > maxId) { seen++; if (!ok) hits.push({ at: 'changes.md CHG-' + m[1], txt: '第 2 字段不是 ts（`' + f2.slice(0, 40) + '`）' }); }
+    else if (!ok) histBad++;
+  }
+  return { seen, hits, note: '历史行（≤ ' + (base && base.changesMaxId || '--') + '）不合规 **' + histBad + '** 条，append-only 不判红' };
+}
+
+/* X5 · **只报告**：记录里的 md5 与磁盘的差距（CHG-025 的「常量会腐烂」）
+ * 不判红 —— 它指向的**全是历史行**，判红会变成一条永远红的断言（会训练人忽略红色）。
+ * 但**每次跑都打印**，让腐烂可见；能实测的数不估。 */
+const X5_PARSE = (field) => {
+  if (field === '--' || /^[0-9a-f]{32}$/.test(field) || /（/.test(field)) return [];
+  const m = /^([^{]*)\{([^}]*)\}(.*)$/.exec(field);
+  if (m) return m[2].split(',').map((s) => m[1] + s.trim() + m[3]);
+  return [field];
+};
+
+function x5() {
+  const f = path.join(REC, 'changes.md');
+  if (!fs.existsSync(f)) return { seen: 0, hits: [], note: '' };
+  const map = new Map();
+  for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
+    const g = /^(CHG-\d{3}) (\S+) (\S+)/.exec(l);
+    if (!g) continue;
+    const hex = [...l.matchAll(/\b[0-9a-f]{32}\b/g)].map((x) => x[0]);
+    if (!hex.length) continue;
+    for (const p of X5_PARSE(g[3])) map.set(p, { id: g[1], md5: hex[hex.length - 1] });
+  }
+  let same = 0; const stale = [];
+  for (const [p, v] of map) {
+    let st; try { st = fs.statSync(p); } catch (e) { continue; }
+    if (!st.isFile()) continue;
+    const now = require('crypto').createHash('md5').update(fs.readFileSync(p)).digest('hex');
+    if (now === v.md5) same++; else stale.push({ at: p, txt: '记录=' + v.md5.slice(0, 8) + ' 磁盘=' + now.slice(0, 8) + '（最后记录于 ' + v.id + '）' });
+  }
+  return { seen: map.size, hits: [], note: '被记录过 md5 的文件 **' + map.size + '** 个 · 最新记录与磁盘一致 **' + same + '** · 已过期 **' + stale.length + '**', report: stale };
+}
+
+/* ------------------------------------------------------------------ 纯判定（--inject 测的就是这几个，唯一实现） */
+
+/* X1 的判定体是两件纯函数：① 剥注释 ② 登记表解析。 */
+function x1Strip(src, isSh) { return stripComments(src, isSh); }
+function x1Reg(rows) {
+  const map = new Map();
+  for (const l of rows) {
+    if (!l.trim().startsWith('|')) continue;
+    const m = /^\|\s*`([^`]+)`/.exec(l.trim());
+    if (m) map.set(m[1], true);
+  }
+  return map;
+}
+function x2Ok(win) { return X2_WORDS.test(win); }
+function x4Ok(f2) { return X4_TS.test(f2); }
+function x5Parse(field) { return X5_PARSE(field); }
+
+/* ------------------------------------------------------------------ 主流程 */
+
+const argv = process.argv.slice(2);
+const has = (k) => argv.includes(k);
+const MODE = has('--inject') ? 'inject' : has('--baseline') ? 'baseline' : has('--report') ? 'report' : 'scan';
+
+/* X6 · **只报告**：活引用检查面（C5）到底覆盖哪些文件（ISS-025）
+ * 根因：C5 的检查面是 `fileset.js` 的 **7 段**（`MODE.md` + `refs/*.md`），**不含 `.check/`**；
+ * 而「`skills/constraint-mode/SKILL.md` 被 7 处引用」是**一次 grep** 数出来的 ——
+ * **两套口径，同名不同物**。ISS-025 卡了一整天就卡在这里。
+ *
+ * ★ 测量出来的第四个修正（**负面结果，如实记**）：本想做一条**判红**规则
+ *   「凡出现『N 处引用』必须写明口径」→ 实测 16 个候选里 6 个命中，
+ *   而抽看即知多数是普通叙述里的「N 处」+「引用」**同形**（同 X4 词表版的命运）。
+ *   → **判红版废弃**；改成**每次跑都把检查面打印出来**，让「口径」永远可见、不需要谁记得问。
+ */
+function x6() {
+  const segs = require('./fileset.js').buildFileSet().segs.map((s) => path.relative(HOME, s.file).split(path.sep).join('/'));
+  return {
+    seen: segs.length,
+    hits: [],
+    note: '活引用检查面 **' + segs.length + '** 段：' + segs.join(' · ') +
+      '\n        不含 `.check/` —— 所以「grep 数出 N 处引用」与「C5 报红」是**两套口径**（ISS-025 的根因）',
+    report: [],
+  };
+}
+
+const RULES = {
+  X1: { name: '退出码语义有一处显式登记（ISS-043）', run: () => x1(liveFiles()) },
+  X2: { name: '三态 ↔ 五态有对照声明（ISS-035）', run: x2 },
+  X3: { name: 'evidence 清单只增不减且非空（ISS-026）', run: x3 },
+  X4: { name: '新增 CHG 行第 2 字段是合规 ts（新发现）', run: x4 },
+  X5: { name: '记录 md5 ↔ 磁盘新鲜度（CHG-025）· **只报告不判红**', run: x5, reportOnly: true },
+  X6: { name: '活引用检查面（C5）覆盖哪些文件（ISS-025）· **只报告不判红**', run: x6, reportOnly: true },
+};
+
+function collect() {
+  const out = {};
+  for (const [id, r] of Object.entries(RULES)) out[id] = r.run();
+  return out;
+}
+
+function line(rule, id, res, showSamples) {
+  const n = res.hits.length;
+  const d = (res.dangling || []).length;
+  const tag = (n === 0 && d === 0) ? 'OK  ' : (RULES[rule].reportOnly ? 'NOTE' : 'HIT ');
+  console.log('[' + rule + '] ' + tag + RULES[rule].name + '  检查 ' + res.seen + ' 处 · 命中 ' + n +
+    (d ? ' · 悬空登记 ' + d : '') + (res.missing ? '  ⚠ 文件缺失' : ''));
+  if (res.note) console.log('        ' + res.note);
+  if (showSamples) res.hits.slice(0, 6).forEach((h) => console.log('        ' + h.at + '  ' + h.txt));
+  if (showSamples && n > 6) console.log('        …（共 ' + n + ' 处，只列前 6）');
+  if (showSamples && res.report) res.report.slice(0, 12).forEach((h) => console.log('        STALE  ' + h.at + '  ' + h.txt));
+  if (showSamples && res.report && res.report.length > 12) console.log('        …（共 ' + res.report.length + ' 条过期）');
+  if (showSamples && d) (res.dangling || []).forEach((h) => console.log('        DANGLING  ' + h.at + '  ' + h.txt));
+}
+
+if (MODE === 'baseline') {
+  const cur = x3().dirs;
+  const ev = {};
+  for (const [k, v] of Object.entries(cur)) if (v >= 0) ev[k] = v;
+  let maxId = 'CHG-000';
+  for (const l of fs.readFileSync(path.join(REC, 'changes.md'), 'utf8').split('\n')) {
+    const m = /^(CHG-\d{3}) /.exec(l);
+    if (m && Number(m[1].slice(4)) > Number(maxId.slice(4))) maxId = m[1];
+  }
+  fs.writeFileSync(BASELINE, JSON.stringify({
+    _note: '跨物对照判据的基线。evidence = X3 的各日期文件数（判只增不减，不判命名合规）；changesMaxId = X4 只判「比它更新的行」—— 历史行 append-only，判红只会训练人忽略红色（DEC-019）。',
+    _how_to_update: '确认减少/格式漂移是有意为之之后，重跑 `node .check/probe-crossref.js --baseline`。**每写一条新 CHG 都要重跑**，否则新行会落进「历史」而不受判。',
+    evidence: ev,
+    changesMaxId: maxId,
+  }, null, 2) + '\n');
+  console.log('BASELINE 已写 ' + BASELINE + '  · evidence ' + Object.keys(ev).length + ' 个目录 · changesMaxId ' + maxId);
+  process.exit(0);
+}
+
+if (MODE === 'report') {
+  console.log('===== 跨物对照判据 · **只报告不判红**（定规则之前先量误伤）=====');
+  const res = collect();
+  for (const id of Object.keys(RULES)) line(id, id, res[id], true);
+  const tot = Object.values(res).reduce((a, r) => a + r.hits.length, 0);
+  console.log('----');
+  console.log('合计命中 ' + tot + ' 处（**本轮不判红** —— 先看这些命中里有多少是合法自指/历史行）');
+  process.exit(0);
+}
+
+if (MODE === 'inject') {
+  /* ★ 向量必须与标签分开（本轮实测的教训）：第一版把中文说明直接拼进**被测字符串**，
+   *   于是 13 条里 7 条假失败 —— 例如标签尾巴的「（合规 ts）」让 `X4_TS` 不匹配、
+   *   「（花括号展开 2 条）」里的全角括号让 `X5_PARSE` 直接返回 []、前缀「登记表命中：」让
+   *   `startsWith('|')` 为假。**那不是判定体坏了，是尺子自己带着脏东西。**
+   *   所以元组是 [规则, 标签, **输入**, 判定体, 期望]。 */
+  const cases = [
+    ['X1', '代码里的 exit 2 —— 必须留下', '  process.exit(2);', (w) => X1_RE.test(x1Strip(w, false)), true],
+    ['X1', '块注释里的文档行 —— 必须剥掉', '/*\n * 无快照 → 打印 NO-SNAPSHOT · exit 2\n */', (w) => X1_RE.test(x1Strip(w, false)), false],
+    ['X1', 'shell 行注释里的 exit 2 —— 必须剥掉', '# 缺参即 exit 2', (w) => X1_RE.test(x1Strip(w, true)), false],
+    ['X1', '登记表命中', '| `.check/a.js` | 甲 · 拒跑 | x |', (w) => x1Reg([w]).has('.check/a.js'), true],
+    ['X1', '表头行不得当登记', '| 文件 | 2 = 哪一类 | 语义 | 备注 |', (w) => x1Reg([w]).size > 0, false],
+    ['X1', '分隔行不得当登记', '|---|---|---|---|', (w) => x1Reg([w]).size > 0, false],
+    ['X2', '有对照声明 —— 不得报红', '子代理回传三态；主代理**输出形态**另有 ASK/PROGRESS', (w) => x2Ok(w), true],
+    ['X2', '裸三态 —— 必须报红', '4. status 三态：OK / FAIL / BLOCK', (w) => x2Ok(w), false],
+    ['X4', '合规 ts', '2026-09-16T05:15Z', (w) => x4Ok(w), true],
+    ['X4', '第 2 字段是路径（缺 ts）—— 必须报红', '.check/record/issues.md', (w) => x4Ok(w), false],
+    ['X4', '带了秒 —— 必须报红', '2026-09-16T02:02:00Z', (w) => x4Ok(w), false],
+    ['X4', '日期只有日精度 —— 必须报红', '2026-09-16', (w) => x4Ok(w), false],
+    ['X5', '花括号展开成 2 条', '.check/record/{issues.md,decisions.md}', (w) => x5Parse(w).length === 2, true],
+    ['X5', '`--` 展开 0 条（不得把 md5 当路径）', '--', (w) => x5Parse(w).length === 0, true],
+    ['X5', '纯 md5 不得当路径', '3f3192d5bc8b3de8482ae558915c3a1d', (w) => x5Parse(w).length === 0, true],
+    ['X5', '中文描述不得当路径', 'skills/（22 个目录）', (w) => x5Parse(w).length === 0, true],
+  ];
+  let ok = 0, bad = 0;
+  for (const [id, label, input, fn, want] of cases) {
+    const got = fn(input);
+    if (got === want) { ok++; console.log('  ✓ ' + id + '  ' + (want ? 'CAUGHT' : 'CLEAN ') + '  ' + label); }
+    else { bad++; console.log('  ✗ ' + id + '  期望 ' + (want ? '命中' : '干净') + ' 实得 ' + (got ? '命中' : '干净') + '  ' + label + '  ← 输入=' + JSON.stringify(input)); }
+  }
+  console.log('----');
+  console.log('双向测 ' + cases.length + ' 条：符合 ' + ok + ' / 不符 ' + bad);
+  process.exit(bad ? 1 : 0);
+}
+
+const ex = loadExempt();
+const res = collect();
+const used = new Set();
+let red = 0;
+let ruleDangling = 0;
+for (const id of Object.keys(RULES)) {
+  const r = res[id];
+  const keep = [];
+  for (const h of r.hits) {
+    const hit = ex.list.find((e) => e.rule === id && e.at === h.at);
+    if (hit) used.add(hit.rule + ' ' + hit.at);
+    else keep.push(h);
+  }
+  /* 规则自带的悬空（例如 X1 的登记表里有、磁盘上已不含 exit 2）也计入拒跑面 */
+  const rd = (r.dangling || []).filter((d) => {
+    const hit = ex.list.find((e) => e.rule === id && e.at === d.at);
+    if (hit) { used.add(hit.rule + ' ' + hit.at); return false; }
+    return true;
+  });
+  ruleDangling += rd.length;
+  line(id, id, { seen: r.seen, hits: keep, dangling: rd, missing: r.missing, note: r.note, report: r.report }, true);
+  if (!RULES[id].reportOnly) red += keep.length;
+}
+console.log('---- 豁免（逐条打印；豁免的正当理由只有「记录层 append-only」）----');
+if (!ex.list.length) console.log('（无）');
+for (const e of ex.list) console.log('EXEMPT  ' + e.rule + '  ' + e.at + '  ← ' + e.why);
+const dangling = ex.list.filter((e) => !used.has(e.rule + ' ' + e.at));
+if (dangling.length) {
+  console.log('DANGLING  悬空豁免 ' + dangling.length + ' 条（登记了却没命中）→ 必须删掉：' + dangling.map((d) => d.rule + ' ' + d.at).join(' · '));
+}
+const dang = dangling.length + ruleDangling;
+console.log('结论：命中 ' + red + ' 处 · 豁免 ' + ex.list.length + ' 条 · 悬空 ' + dang + '（豁免 ' + dangling.length + ' + 规则 ' + ruleDangling + '）');
+process.exit(dang ? 2 : (red ? 1 : 0));
+
+

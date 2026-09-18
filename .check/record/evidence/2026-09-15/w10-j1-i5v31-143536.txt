@@ -1,0 +1,258 @@
+== I5 v3.1 加固 + 测试脚本归档 · 留证 · 2026-09-15T14:35:36Z ==
+
+判据: .check/andyngo-integrity.js
+  md5=a83b6b78758bde6ba79b176c42c3c450  行数=245
+归档测试脚本 .check/tests/ :
+  0d072863602147ab6d29212cfe67d502 *.check/tests/andyngo-manifest.js
+  26c4d32fbce4e29420987b094aa2f4a9 *.check/tests/card-entry-coverage.sh
+  a52a4bee12520c61dbe161f7f14f6c7d *.check/tests/card-entry-coverage2.js
+  cf295906dcb0f891f019fc6e382ff810 *.check/tests/i5-bidirectional-test.sh
+  0e9a98b831f7103614863f658bd336e8 *.check/tests/judge-selftest.sh
+
+===== 真盘判据全输出 =====
+===== andyngo · 事件流完整性校验 =====
+目标: .check/record/eventlog/2026-09-15.txt
+[I1] 字段数 = 8                   OK          9 行全部 8 字段
+[I2] seq 连续                    OK          9 条 seq = 001 002 003 004 005 006 007 008 009
+[I3] evidence_ptr 存在           OK          全部 evidence_ptr 真实存在（`--` 已放行）
+[I4] ts 单调递增                   OK          9 条 ts 非降
+[I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w10-j1-i5v31-143536.txt ｜ A=8 B=9 豁免=2
+---- 豁免（逐条打印，SEAL 铁律：豁免必须逐条、必须写原因、必须打印）----
+EXEMPT  EX-001 EVT 005 2026-09-15T14:19Z 留证文件名 `r2-card-coverage-220801.txt` 不符合作业留证约定 `w<wave>-j<job>-<slug>.txt`。原因：EVT 005 写入于 14:09:20Z，而该约定于 14:19Z 随 I5 v2 确立 —— **约定晚于该行**。事件流 append-only，改写 `evidence_ptr` 等于改历史，故不改。豁免范围仅限「文件名」一项。
+EXEMPT  EX-002 EVT 007 2026-09-15T14:19Z 留证文件名 `judge-hardening-220801.txt` 同上原因（写入于 14:14:09Z，早于约定确立）。豁免范围仅限「文件名」一项。
+----
+结论：4 OK / 1 FAIL / 0 UNVERIFIED
+RC=1
+
+===== 双向测全输出（13 红灯用例 + G1 + C1/C2）=====
+===== I5 v3 双向测 =====
+
+--- G1 该绿的绿：真事件流 + 真豁免表 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w10-j1-i5v31-143536.txt ｜ A=8 B=9 豁免=2
+  RC=1（期望 0）
+  [PASS] G1 I1–I4 全 OK（rc 只反映 I5）
+  [FAIL] G1 rc=1 期望 0
+  [FAIL] G1 缺「双向单射成立」
+  [PASS] G1 不含「D1」
+  [FAIL] G1 不该含「D2」
+  [PASS] G1 不含「D3」
+  [PASS] G1 不含「D4」
+  [PASS] G1 不含「D5」
+  [PASS] G1 不含「悬空豁免」
+
+--- R1 D3：豁免表缺失 → 必须点名 EVT 005 与 EVT 007 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w10-j1-i5v31-143536.txt；D3 未按约定命名且未被有效豁免: EVT 005(r2-card-coverage-220801.txt), EVT 007(judge-hardening-220801.txt) ｜ A=8 B=9 豁免=0
+  RC=1（期望 1）
+  [PASS] R1 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R1 rc
+  [PASS] R1 含「D3」
+  [PASS] R1 含「EVT 005」
+  [PASS] R1 含「EVT 007」
+  [PASS] R1 不含「D1」
+  [FAIL] R1 不该含「D2」
+  [PASS] R1 不含「D4」
+  [PASS] R1 不含「D5」
+  [PASS] R1 不含「悬空豁免」
+
+--- R2 D3：新增一行、留证不合约定 → 只点名 EVT 010（005/007 仍被豁免）---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w10-j1-i5v31-143536.txt；D3 未按约定命名且未被有效豁免: EVT 010(eventlog-verifytest-135358.txt) ｜ A=8 B=10 豁免=2
+  RC=1（期望 1）
+  [PASS] R2 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R2 rc
+  [PASS] R2 含「D3」
+  [PASS] R2 含「EVT 010」
+  [PASS] R2 不含「D1」
+  [FAIL] R2 不该含「D2」
+  [PASS] R2 不含「D4」
+  [PASS] R2 不含「D5」
+  [PASS] R2 不含「悬空豁免」
+  [PASS] R2 不含「EVT 005」
+
+--- R3 D2孤儿：留证目录多一个无人引用的合规文件（非空）---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w10-j1-i5v31-143536.txt, w9-j9-orphan.txt ｜ A=9 B=9 豁免=2
+  RC=1（期望 1）
+  [PASS] R3 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R3 rc
+  [PASS] R3 含「D2」
+  [PASS] R3 含「孤儿」
+  [PASS] R3 含「w9-j9-orphan.txt」
+  [PASS] R3 不含「D1」
+  [PASS] R3 不含「D3」
+  [PASS] R3 不含「D4」
+  [PASS] R3 不含「D5」
+  [PASS] R3 不含「悬空豁免」
+
+--- R4 D2重复：两行引用同一留证（两行同为 W1 J1，避免触发 D4）---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 被重复引用: w1-j1-probe.txt ｜ A=1 B=2 豁免=0
+  RC=1（期望 1）
+  [PASS] R4 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R4 rc
+  [PASS] R4 含「D2」
+  [PASS] R4 含「被重复引用」
+  [PASS] R4 含「w1-j1-probe.txt」
+  [PASS] R4 不含「D1」
+  [PASS] R4 不含「D3」
+  [PASS] R4 不含「D4」
+  [PASS] R4 不含「D5」
+  [PASS] R4 不含「悬空豁免」
+  [PASS] R4 不含「孤儿」
+
+--- R5 D1：某行无留证（另一行正常引用，避免 D2 孤儿共触发）---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D1 无留证的行: EVT 002 ｜ A=1 B=2 豁免=0
+  RC=1（期望 1）
+  [PASS] R5 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R5 rc
+  [PASS] R5 含「D1」
+  [PASS] R5 含「EVT 002」
+  [PASS] R5 不含「D2」
+  [PASS] R5 不含「D3」
+  [PASS] R5 不含「D4」
+  [PASS] R5 不含「D5」
+  [PASS] R5 不含「悬空豁免」
+
+--- R6 悬空豁免：全部行合规 + 豁免表登记一条不存在的行 → 只有悬空豁免 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        悬空豁免（登记的 seq 不在事件流）: 099 ｜ A=1 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R6 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R6 rc
+  [PASS] R6 含「悬空豁免」
+  [PASS] R6 含「099」
+  [PASS] R6 不含「D1」
+  [PASS] R6 不含「D2」
+  [PASS] R6 不含「D3」
+  [PASS] R6 不含「D4」
+  [PASS] R6 不含「D5」
+
+--- R7 A=0 假绿：行指向的合规名文件在留证目录**之外** → 必须 UNVERIFIED(2) ---
+  [I5] 事件行 ↔ 作业留证 双向单射           UNVERIFIED  合规留证集为空（A=0）—— 双向单射无可建立，判据空转，不报 OK ｜ A=0 B=1 豁免=0
+  RC=2（期望 2）
+  [PASS] R7 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R7 rc
+  [PASS] R7 含「A=0」
+  [PASS] R7 含「空转」
+  [PASS] R7 不含「双向单射成立」
+
+--- R8 D4：文件名合规但 wave/job 与行不符（行 W3 J1 指向 w1-j1-…）---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D4 文件名与行的 wave/job 不一致: EVT 001(W3 J1 ≠ w1-j1-probe.txt) ｜ A=1 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R8 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R8 rc
+  [PASS] R8 含「D4」
+  [PASS] R8 含「W3 J1」
+  [PASS] R8 不含「D1」
+  [PASS] R8 不含「D2」
+  [PASS] R8 不含「D3」
+  [PASS] R8 不含「D5」
+  [PASS] R8 不含「悬空豁免」
+
+--- R9 D5：零字节留证 = 没留证 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D5 零字节留证（= 没留证）: w1-j1-empty.txt ｜ A=1 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R9 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R9 rc
+  [PASS] R9 含「D5」
+  [PASS] R9 含「零字节」
+  [PASS] R9 含「w1-j1-empty.txt」
+  [PASS] R9 不含「D1」
+  [PASS] R9 不含「D2」
+  [PASS] R9 不含「D3」
+  [PASS] R9 不含「D4」
+  [PASS] R9 不含「悬空豁免」
+
+--- R10 松豁免：豁免只写 EVT 号、不写留证文件名 → 不认，D3 报（且**不**另报悬空豁免）---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D3 未按约定命名且未被有效豁免: EVT 001(eventlog-verifytest-135358.txt)【该 seq 有豁免登记但未指名本文件名 → 登记不生效】 ｜ A=1 B=2 豁免=0
+  RC=1（期望 1）
+  [PASS] R10 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R10 rc
+  [PASS] R10 含「D3」
+  [PASS] R10 含「EVT 001」
+  [PASS] R10 含「登记不生效」
+  [PASS] R10 不含「D1」
+  [PASS] R10 不含「D2」
+  [PASS] R10 不含「D4」
+  [PASS] R10 不含「D5」
+  [PASS] R10 不含「悬空豁免」
+  [PASS] R10 不含「白登记」
+
+--- R11 无效豁免（v3.1 新增空档）：行留证**本身合规** + 豁免没指名 → 白登记，必须报 ---
+    修前这是假绿：D3 不管（base 合规）、悬空豁免不管（seq 在）→ 登记无效却零信号
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        无效豁免（该行留证本身合规，豁免未指名任何留证 → 白登记）: 001 ｜ A=1 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R11 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R11 rc
+  [PASS] R11 含「无效豁免」
+  [PASS] R11 含「白登记」
+  [PASS] R11 不含「D1」
+  [PASS] R11 不含「D2」
+  [PASS] R11 不含「D3」
+  [PASS] R11 不含「D4」
+  [PASS] R11 不含「D5」
+  [PASS] R11 不含「悬空豁免」
+
+--- R12 子串冒领（v3.1）：登记写 r2-...txt.bak，行引用 r2-...txt → 不是同一 token，不认 ---
+    修前这是假绿：exCovers 用 indexOf 子串匹配 → 更长的名字把短名字的豁免冒领走
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D3 未按约定命名且未被有效豁免: EVT 001(r2-card-coverage-220801.txt)【该 seq 有豁免登记但未指名本文件名 → 登记不生效】 ｜ A=0 B=1 豁免=0
+  RC=1（期望 1）
+  [PASS] R12 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R12 rc
+  [PASS] R12 含「D3」
+  [PASS] R12 含「EVT 001」
+  [PASS] R12 含「登记不生效」
+  [PASS] R12 不含「D1」
+  [PASS] R12 不含「D2」
+  [PASS] R12 不含「D4」
+  [PASS] R12 不含「D5」
+  [PASS] R12 不含「悬空豁免」
+  [PASS] R12 不含「白登记」
+
+--- R13 重复登记（v3.1）：同一 seq 登记两次 → 后者静默顶掉前者，必须报 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        豁免表重复登记同一 seq（后者静默顶掉前者）: 001 ｜ A=0 B=1 豁免=1
+  RC=1（期望 1）
+  [PASS] R13 I1–I4 全 OK（rc 只反映 I5）
+  [PASS] R13 rc
+  [PASS] R13 含「重复登记」
+  [PASS] R13 含「001」
+  [PASS] R13 不含「D1」
+  [PASS] R13 不含「D2」
+  [PASS] R13 不含「D3」
+  [PASS] R13 不含「D4」
+  [PASS] R13 不含「D5」
+  [PASS] R13 不含「悬空豁免」
+  [PASS] R13 不含「白登记」
+
+--- C1 反向复现：撤掉全部夹具，真事件流必须回到 rc=0 ---
+  RC=1
+  [FAIL] RC=1 期望 0
+
+--- C2 夹具隔离（**哈希内容**，不是路径清单）---
+  内容哈希 前=8abc99aed81b018a6035a6aa3d423e8f
+  内容哈希 后=8abc99aed81b018a6035a6aa3d423e8f
+  [PASS] 判据只读：内容未变（改内容会被抓到，路径清单哈希抓不到）
+
+双向测结论: 有 6 项失败
+
+===== 补记（append，不改上文）=====
+
+上文「双向测结论: 有 6 项失败」记录的是**写 EVT 010 之前的瞬时状态**：
+留证文件已创建、事件行尚未写入 → I5 正确地判 D2 孤儿（G1 报 3 项、R1/R2 各报 1 项，共 6）。
+这正是 ISS-009 描述的窗口，**判据行为正确，不是缺陷**。操作规则仍是「先写留证、再写事件行、中间不跑 I5」。
+
+写入 EVT 010 后重跑：
+  [I1] 字段数 = 8      OK   10 行全部 8 字段
+  [I2] seq 连续        OK   10 条 seq = 001..010
+  [I3] evidence_ptr    OK   全部真实存在
+  [I4] ts 单调递增     OK   10 条非降
+  [I5] 双向单射        OK   双向单射成立 · A=8 B=10 豁免=2
+  结论 5 OK / 0 FAIL / 0 UNVERIFIED · RC=0
+
+其后又发现并修掉一处**测试自身**的脆弱点（不是判据缺陷）：
+R2 用例硬编码追加 `EVT 010`，而真日志此时已长到 10 行 → seq 撞号 → I2 FAIL 顶替 rc。
+改为动态取号（真日志 `grep -c '^EVT '` + 1）。这处是被本轮新增的「I1–I4 必须全 OK」
+前置断言抓到的 —— 没有那条断言，撞号会被 rc=1「碰巧相符」掩盖成通过。
+
+另：本文件「真盘判据全输出」一节是在写入 EVT 010 **之前**跑的，故其中 I5 明细与上方补记不同；
+两段都是当时状态的真实记录，未做任何改写。
+
+测试脚本（R2 修复后）：.check/tests/i5-bidirectional-test.sh
+  md5=9691b053c3f41af23b62f7f20fe0e7fe  197 行
+判据本体未改动，md5 仍为 a83b6b78758bde6ba79b176c42c3c450（与 W9 验收冻结值一致）

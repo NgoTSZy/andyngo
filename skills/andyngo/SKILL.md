@@ -1,0 +1,124 @@
+---
+name: andyngo
+description: 统一启动路由。触发词：启动, 开始, 继续, 接上次, 修, 坏了, 测一下, 验收, 巡检, 复盘, 收尾, 落, 定稿. 路由到 10 个事件程序之一。不执行。
+---
+
+# /andyngo — 路由器
+
+## 主代理三件事
+① 判事件 ② 派子代理 ③ 追加事件流
+从不执行。
+
+## 判事件表（唯一一张，不许散）
+
+| 用户的话 | 事件 | 类 |
+|----------|------|-----|
+| 做/建/写 + 新对象；启动/开始 | TASK | A |
+| 继续/接上次 | RESUME | A |
+| 报告/复盘 | RETRO | A |
+| 修/坏了/报红 | FIX | B |
+| 部署 | DEPLOY | B |
+| 测/验 | VERIFY | C |
+| 安全检查 | SECURITY | C |
+| 查一下/巡检/空启动 | AUDIT | C |
+| 自改良 | EVOLVE | D |
+| 落/定稿/收尾 | SEAL | D |
+| 判不出 | ASK×1，列 10 个 | — |
+| **判得出，但不属于本域** | **REJECT** | — |
+
+**REJECT 的判据（必须能一眼判）**：这件事做完之后，**`.check/record/` 的四件套里不会多出
+任何一条与该事本身有关的记录**（账本/自愈/证伪/收尾都与它无关），那它就不该进这个账本。
+典型：一次性创作（写个小游戏/画个图）、闲聊、纯外部系统操作。
+**REJECT 怎么做**：`REJECT <一句理由>` → **不进账本、不写 EVT、不派子代理**，
+直接告诉用户「这不属于本 skill 的域，建议直接做（或走别的流程）」，**然后照常帮他做** ——
+**拒的是「记账」，不是「帮忙」。**
+**为什么必须有这一类**（2026-09-16 实测）：本表原先只有 10 类、**没有「不适用」这个出口**，
+于是「写一个贪吃蛇」被判成 TASK、**真的写进了 `eventlog/`**（`EVT 024`）——
+而那是约束模式系统的事件流。**「路由成功」≠「路由正确」。**
+本项目其它工具的退出码是**三态**（`0 通过 / 1 失败 / 2 拒跑`），**只有这个路由器原先缺第三态**。
+
+显式：`/andyngo start <任务>` → TASK（`/andyngo task` 同义）
+显式：`/andyngo fix` `/andyngo verify` `/andyngo security` `/andyngo deploy` `/andyngo retro` `/andyngo seal` `/andyngo resume` `/andyngo evolve` → 各自同名事件
+空启动：`/andyngo` → AUDIT
+轻量入口：`/andyngo issue <描述>` → 记 ISS
+
+## 四条硬规矩
+1. 说"已落"前必须跑核对命令。核不出证据写"待落"。
+2. 同一文件不许并行编辑。
+3. 成功返回值不是事实，是意图。
+4. 测不了什么，一开始就说。
+
+## 优先级 P0–P7
+P0 口径 → P1 搜已有 → P2 验接口 → P3 只并行独立 →
+P4 只回结论 → P5 独立验收 → P6 安全在部署前 → P7 最简起步
+
+## 主代理禁令
+1. 不粘贴子代理原始输出
+2. 不解释（只追加 EVT）—— **例外见下**
+3. 不自己执行（只派）
+4. 不直读 artifacts/（派 Explore，摘要 ≤3 行）
+
+### 禁令 2 的例外（裁决规则，2026-09-16 加）
+**用户明确要求「报告 / 展示 / 询问」时，报告优先于禁令 2。**
+判据：用户的话里出现「报告 / 汇报 / 说一下 / 展示 / 给我看 / 问 / 选 / 怎么改」这类
+**要人读的东西** → **必须**输出人话，不能只追加 EVT。
+**为什么要有这条**：禁令 2 与用户的实际需求**方向相反** —— 2026-09-16 实测那次会话里，
+用户同时要求「报告行为流程」「向用户打开展示效果」「询问下一步如何修」，
+而禁令写的是「不解释」。两条在同一份规格里打架，**规格原先没给裁决规则**
+（同本项目 `DEC-025` 那个形状：记录层说只读、§三 说能修）。
+**取超集，不是二选一**：**EVT 照追加**（禁令 2 的本意是「不让子代理的原始输出污染主对话」），
+**报告照输出**（用户要看）—— 两者本来不冲突，冲突的只是那个「**只**」字。
+
+## 事件格式
+EVT <seq> <ts> <wave> <job> <status> <artifact_ptr> <evidence_ptr>
+
+## 记录层
+.check/record/  ← 90 天
+  eventlog/  issues.md  decisions.md  changes.md  evidence/
+
+### 留证命名（**写之前照抄**）
+`w<wave>-j<job>-<slug>.txt` —— **`job` 必须是纯数字**，`<slug>` 非空。
+判据 `andyngo-integrity.js` 的 I5 用正则 `^w\d+-j\d+-.+\.txt$` 强制这一点，**不合规就 FAIL**。
+
+- `w23-j8-route-live-test.txt` ✓
+- `w23-j8b-route-live-test.txt` ✗（job 段 `8b` 不是纯数字 → I5 FAIL）
+
+**为什么要把这句写在这里**（2026-09-16 实测）：这个约定原先**只存在于判据的正则里**，
+**没有任何给人读的地方写明** —— 于是同一类命名失误在 **15 分钟内发生了两次**
+（`w23-j8b-…`、`w23-j8c-…`），两次都只能**事后**由 I5 报红、再登记豁免。
+**纪律（「下次写对」）在几分钟内就失效了；把约束写进权威文本才是机制。**
+
+## 输出形态
+OK / FAIL / ASK / PROGRESS / BLOCK
+PROGRESS 不消耗 ASK 配额（总配额 2）。
+
+## ★ 判出事件后，必读哪个 references（**不是可选**）
+**本表是判事件表的第二半：判出事件 ≠ 知道怎么做。** 判出之后**先读**对应文件，再动手。
+漏读的后果有实测：2026-09-16 那次 TASK，我只凭本 SKILL.md 就派了子代理 ——
+而 `A-discovery/andyngo-task.md` 里写着 TASK 要走 **G1–G7 七步**（含 G3 三方案、
+G4 写死契约、G5 四波次），**我一步都没走**，等于把一个有流程的事件当成了「随便派个人」。
+
+| 判出的事件 | **必读**（动手之前） |
+|---|---|
+| TASK | `A-discovery/andyngo-task.md`（G1–G7）· **`andyngo-sources.md`**（五层参考池；G2/G3 要求每步标注用了哪一层的哪个源，明文「**不许从零发明**」）· `andyngo-design-pool.md` · `assets/andyngo-contract.md`（G4 要写死的契约） |
+| RESUME | `A-discovery/andyngo-resume.md` |
+| RETRO | `A-discovery/andyngo-retro.md` · `andyngo-report.md` |
+| FIX | `B-execution/andyngo-fix.md` |
+| DEPLOY | `B-execution/andyngo-deploy.md` |
+| VERIFY | `C-assurance/andyngo-verify.md`（含「八条铁律」） |
+| SECURITY | `C-assurance/andyngo-security.md` |
+| AUDIT | `C-assurance/andyngo-audit.md` |
+| EVOLVE | `D-evolution/andyngo-evolve.md` |
+| SEAL | `D-evolution/andyngo-seal.md` |
+| **任何事件** | `andyngo-event-protocol.md`（子代理契约 / 主代理权限 / 禁令）· `andyngo-record.md` · `andyngo-agents.md` · `andyngo-glossary.md`（A–D 域术语基准；术语拿不准时先查这里，别自己发明） |
+
+**两个硬点**：
+1. **TASK 的 G2/G3 要求「依据外部源」** → 必须翻 `andyngo-sources.md`
+   （L1 设计系统 / L2 组件库 / L3 配色·字体·图标 / L4 UI 灵感 / **L5 声音·图片·动效**）。
+   **搜不到就写「未搜到，自制」** —— 原文是：**「不许从零发明」**。
+2. **子代理契约必须随任务派发**（`andyngo-event-protocol.md` §子代理契约）：
+   子代理**回传只能是 EVT 那一行**，不许加解释。
+   **不给契约 = 子代理必然回一大段话**（2026-09-16 实测，两次都是）。
+
+## 未验证假设
+见 `references/andyngo-event-protocol.md` 末节。

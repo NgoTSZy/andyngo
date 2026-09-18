@@ -1,0 +1,233 @@
+# W23 J14 · ISS-103 留证（`.check/hook-session-start.js` 文件头失效断言）
+
+- 轮次：W23 J14
+- 议题：ISS-103（low，`open → resolved`）· 裁决 DEC-041 · 新立 ISS-114
+- 写锁：`W23-J14-ISS103`（TTL 60min，持有者声明）
+- 冻结件（开工 + 收尾各核对一次，见 §11）：
+  - `.check/andyngo-integrity.js` = `e8d1386e91e983c4961f5796a2486558`
+  - `.check/check-protocol.js` = `4f0aa2d0c63c2d1a46bd3e86cdbeebc6`
+  - `.check/tests/i5-bidirectional-test.sh` = `5a2eea14e8a80bf89557ecaf146965ff`
+- 归档件（**改前**）：`.check/record/evidence/2026-09-16/hook-session-start.js.pre-iss103-231438`
+  = `d7f179325b2bfcb762cccdcb7e92da50` / **77 行**
+
+---
+
+## §0 议题原文要什么
+
+ISS-103 记的是两件事：
+1. `.check/hook-session-start.js` **从未被宿主加载**；
+2. 它**文件头里那段「宿主从未加载」的论据已被推翻，结论却留着** ——
+   带强制语气的旧论据会误导下一个会话。
+
+它的「留给裁决」给了三条：**删掉它 / 补一段说明使命已完成 / 过闸门让它真的跑起来**。
+
+---
+
+## §1 只读测量（本轮 · 宿主侧口径）
+
+**口径声明**：统计**排除** `logs/` 下各日期目录里的 `sdk/conversations/` ——
+那里记录的是**对话全文**，我在对话里讨论过的每个词都会出现在那里，会把「宿主侧统计」
+污染成噪声（本会话第一次测量就被它污染过一次：报「3 处」，全部来自会话日志）。
+
+扫描：`~/.workbuddy-ai/logs/` 下 **410** 个文件（跳过会话日志 **66** 个）。
+
+```
+[HookExecutor] spawn 行数                     1637
+  其中含 .check/                              1195
+  其中含 hook-session-start                      0
+[HookManager] event=SessionStart 行数          139
+[HookManager] event=PostToolUse 行数             0
+```
+
+**ISS-103 的核心事实成立且被加固**：`hook-session-start` 在 1637 条 spawn 行里出现 **0** 次。
+
+**★ 原文的数字全部过期**（它在 2026-09-16T10:43Z 写的）：
+`event=SessionStart` 29 → **139** · `[99]` spawn 531 / `.check/` 484 → **1637 / 1195**。
+
+---
+
+## §2 关键分解：`1195` 里有多少是真的
+
+按「spawn 行里出现的脚本名」分组（含 `.check/` 的 1195 行）：
+
+| 组 | 行数 | 是不是真 spawn |
+|---|---|---|
+| `immunity-hook.js` | **1152** | **是**（宿主真的在调用它） |
+| `<无脚本名>` | **40** | **否** —— 是**我自己 grep 这些日志的命令行**被日志记下 |
+| `hook-post-edit.js` | **3** | **否** —— 是**我写的测试夹具文本**（`fs.writeFileSync(p, JSON.stringify({…message:['[HookExecutor] spawn C:\Users\x\.check\hook-post-edit.js']}))`） |
+
+`1152 + 40 + 3 = 1195` ✅ 精确分解。
+
+**⇒ 宿主真正 spawn 过的 `.check/` 脚本只有一个：`immunity-hook.js`（1152 次）。**
+
+**★ 由此挖出 `[99]` 的两个缺陷**（已另立 **ISS-114**）：
+1. **不区分是哪个 hook** —— 只要**任何一个** hook 在跑它就绿 → 看不见「某一个登记在册的 hook 静默失效」；
+2. **自指污染** —— **测量行为本身**（`grep '[HookExecutor] spawn'`）会被日志记下并计入被测量，
+   于是「数这个数」这个动作会**抬高**这个数（1195 里 **43** 行是这种噪声）。
+
+---
+
+## §3 根因刷新：第二次反转
+
+**原文根因（两层）**：① `settings.json` 的 `hooks` 里只有 `PostToolUse`，没有 `SessionStart`；
+② 官方文档「所有外部修改需在 `/hooks` 面板审核后生效」是一道**人工审批闸门**。
+
+**本轮实测**：
+
+```
+~/.codebuddy/settings.json     (579 B, mtime 2026-09-15 14:03)
+  SessionStart → bash "…/.check/hook-post-edit.sh" hook-session-start.js   ← 确实有！
+  PostToolUse  → bash "…/.check/hook-post-edit.sh"
+
+~/.workbuddy-ai/settings.json  (1584 B, mtime 2026-09-16 13:16)
+  PostToolUse  → node.exe "…/.check/immunity-hook.js"   (matcher: Write|Edit|MultiEdit)
+  （没有 SessionStart）
+```
+
+- 根因①**部分成立但要改口径**：`~/.workbuddy-ai/settings.json` 里**确实没有** SessionStart；
+  但 `~/.codebuddy/settings.json` 里**有** —— 所以准确说法是「**注册它的不是宿主读的那份配置**」。
+- 根因②**被反证推翻**：若「手改 settings.json 不生效 / 有人工审批闸门」成立，
+  `immunity-hook.js` 不可能从 0 涨到 **1152** —— 而它正是手改进**宿主读的那份**配置里的。
+
+**⇒ 新根因（一句话）：注册 `hook-session-start.js` 的配置文件不是宿主读的那一份。**
+
+**另**：`hook-post-edit.sh` 在 1637 条 spawn 行里出现 **0** 次 → `~/.codebuddy/settings.json`
+里的两个 hook（SessionStart 与 PostToolUse）**都从未被加载过**。
+
+---
+
+## §4 裁决（DEC-041）
+
+**取三条候选里的第二条：补说明、保留文件、不动配置。**
+
+| 候选 | 裁决 | 理由 |
+|---|---|---|
+| (a) 删掉文件 | **否决** | 违反用户长期指令「**保留原本的要求**」（规格内部矛盾取超集、任何名字都不删）；且它承载的「判据认不出形状」教训实例会一并消失 |
+| (b) 在 `~/.workbuddy-ai/settings.json` 加 `SessionStart` 把它激活 | **否决** | **没有待它回答的问题** —— 使命已完成；代价是每次新会话注入一行常驻上下文 + 改宿主行为。「完整运作」已由 `immunity-hook.js` 满足 |
+| (c) 补说明、保留文件、不动配置 | **采纳** | 最小改动 + 保留原本的要求 |
+
+**使命已完成的证据**：它自述用途是「验证 hook 到底能不能工作」——
+这个问题已由 `immunity-hook.js` 的 **1152** 次真 spawn 回答。
+
+---
+
+## §5 改了什么
+
+文件：`.check/hook-session-start.js` · **77 → 109 行**
+· `d7f179325b2bfcb762cccdcb7e92da50` → `467d37271d87b9ab7c203d13885c9ba5`（CHG-168）
+
+1. **文件头新增「第四版」段**：写明**使命已完成**、**新根因**、**当前实测值**
+   （1637 / 1195 = 1152+40+3 / 0 / 139 / 0）、以及 `[99]` 的视野缺口指向 ISS-114。
+2. **第二版原文逐字保留**，但包上「**【留证，不要再当成现状】**」限定（同 **CHG-150** 先例），
+   并给两处过期数字就地加「← 已过期」标注。
+   *为什么留证*：那 226/0/17 的错数字是「判据认不出形状」这个教训的**唯一实例**，删了就无据可查。
+3. **`additionalContext` 里两处失效断言同轮纠正**：
+   - 「返回 0 → …依赖 hook 的规则只是提示词」→ 改成「一个都没加载」，并补「**这一条不区分是哪个 hook**（ISS-114）」；
+   - 「若返回 0：原因是官方文档写明的审批闸门 … **这一步只能由人在 CLI 面板里做**」
+     → 换成新根因「注册它的配置文件是不是**宿主读的那一份**」。
+4. **正文逻辑 0 行改动** —— `readStdin` / `classify` / `trace` 与 `process.exit(0)` 一字未动。
+
+---
+
+## §6 ★ 改的过程中踩到一个真坑（留证）
+
+第一版注释里写了 `logs/**` 紧跟 `/sdk/conversations/` —— 其中那个 `*` + `/`
+**提前闭合了块注释**，于是后面的正文变成了代码：
+
+```
+SyntaxError: Unexpected identifier 'spawn'
+    at checkSyntax (node:internal/main/check_syntax:78:13)
+```
+
+**教训（新，已写进 DEC-041 后果⑤）**：**块注释里也会出现 `*/`** ——
+**改注释也必须过 `node --check`**，不能因为「只动了注释」就跳过语法检查。
+
+---
+
+## §7 验证
+
+| 项 | 结果 |
+|---|---|
+| `node --check .check/hook-session-start.js` | **通过** |
+| 实跑（喂 `{"hook_event_name":"SessionStart","cwd":"…"}`） | **rc=0**，payload 文本正确 |
+| 含 `exit 2`？ | **否** → X1 不触发（无需登记 `exit-codes.md`） |
+| 与归档件逐行 diff | **50 行差异**，全部落在注释块与 `additionalContext` 字符串 |
+| 冻结件 3/3 | 见 §11 |
+
+---
+
+## §8 记录层落盘
+
+| 记录 | 变化 | md5 前 → 后 | 行数 |
+|---|---|---|---|
+| `.check/record/issues.md` | ISS-103 `open → resolved`（原地）+ 新增 **ISS-114** | `655e92ff…` → `a46b34fecae44dd3c363ead69202cbc1` | 127 → 128 |
+| `.check/record/decisions.md` | 新增 **DEC-041** | `892b3b75…` → `d1642f190cf15a4783e01a9645957a74` | 51 → 52 |
+| `.check/record/changes.md` | 新增 **CHG-168 / 169 / 170 / 171** | `723e6be5…` → 见 CHG-171 | 175 → 179 |
+| `.check/record/eventlog/2026-09-16.txt` | 新增 **EVT 045** | `da1ed125…` → 见 CHG-171 | 44 → 45 |
+
+**★ `alloc.sh` 的守卫第一次在真实写入中生效**：我给 `ISS-114` / `DEC-041` 的正文**带了号**，
+守卫正确拦下（`ALLOC-FAIL … 正文以号开头 … rc=4`）——
+因为取号器会在正文前**再加一次**号，行首会成 `ISS-114 ISS-114 …`，而记录层 append-only，
+那样写出来的行**永久不合规**（ISS-085 家族）。去掉行首号后重跑通过。
+
+---
+
+## §9 载体（预检 · 记录主体落盘后）
+
+`bash skills/andyngo/scripts/andyngo-audit.sh` → **rc=0**
+报告：`.check/audit/2026-09-16/audit-151639.txt`（303 行）
+
+- **17 段 `EXIT=` 全部为 0**
+- `acceptance`：**12 OK / 0 FAIL / 0 DRIFT / 0 UNVERIFIED**
+- `INTEGRITY`：**14 OK / 0 FAIL**
+- 末行汇总：`载体退出码 **0**：全部 17 段 EXIT=0。`
+
+**★ 这是「真检查」**：ISS-096 修好之后，载体 rc 已携带信息（改前恒 0）。
+
+---
+
+## §10 仍然未做的
+
+1. **判据视野缺口未修** —— `acceptance.js` 第 [99] 项不区分是哪个 hook、且数字含 43 行自指噪声。
+   已**另立 ISS-114**（low），**不在本文件修**。
+   *为什么不与 ISS-103 同轮修*：改 `acceptance.js` 是改门禁（乙类，动接口语义），
+   而 ISS-103 是 low、诉求只是注释准确性 —— 按用户长期指令「**慢慢逐步推行，用最少的资源、改动**」独立成条。
+2. **文件仍然不会被加载** —— 这是**裁决结果，不是遗漏**（理由见 §4 替代方案 b）。
+
+---
+
+## §11 收尾（记录定稿后的最终载体 + 冻结件 + 锁）
+
+**最终载体**（**在 EVT 045 与 CHG-171 落盘之后**跑 —— 报告才可信）：
+`bash skills/andyngo/scripts/andyngo-audit.sh` → **rc=0**
+报告：`.check/audit/2026-09-16/audit-151941.txt`（303 行）
+
+- **17 段 `EXIT=` 全部为 0**（非零段 **0**）
+- `acceptance`：**12 OK / 0 FAIL / 0 DRIFT / 0 UNVERIFIED**
+- `INTEGRITY`：**14 OK / 0 FAIL**
+- X1：**命中 0 处 · 豁免 0 条 · 悬空 0**
+- 记录层：**OK 三份记录全部合规 · 豁免 3 条**
+- 末行：`载体退出码 **0**：全部 17 段 EXIT=0。`
+
+**冻结件（DEC-031）收尾核对 —— 全程 3/3 未变**：
+
+| 冻结件 | 开工 | 收尾 |
+|---|---|---|
+| `.check/andyngo-integrity.js` | `e8d1386e91e983c4961f5796a2486558` | 同 ✅ |
+| `.check/check-protocol.js` | `4f0aa2d0c63c2d1a46bd3e86cdbeebc6` | 同 ✅ |
+| `.check/tests/i5-bidirectional-test.sh` | `5a2eea14e8a80bf89557ecaf146965ff` | 同 ✅ |
+
+**最终哈希**（本节是唯一权威值，§8 的「见 CHG-171」以本节为准）：
+
+| 文件 | md5 | 行数 | 改前 |
+|---|---|---|---|
+| `.check/hook-session-start.js` | `467d37271d87b9ab7c203d13885c9ba5` | **109** | `d7f17932…` / 77 |
+| `.check/record/issues.md` | `a46b34fecae44dd3c363ead69202cbc1` | **128** | `655e92ff…` / 127 |
+| `.check/record/decisions.md` | `d1642f190cf15a4783e01a9645957a74` | **52** | `892b3b75…` / 51 |
+| `.check/record/changes.md` | `61c1dd089fa9bd4e8b25d3081552e027` | **179** | `723e6be5…` / 175 |
+| `.check/record/eventlog/2026-09-16.txt` | `aa36866cdeb89b0e19714da7ee055b0d` | **45** | `da1ed125…` / 44 |
+
+**open 数**：**29**（ISS-103 结案 **−1** · ISS-114 新立 **+1** → 净 **0**）。
+
+**写锁**：`W23-J14-ISS103`（声明 TTL 60min）—— 本轮收尾释放。
+

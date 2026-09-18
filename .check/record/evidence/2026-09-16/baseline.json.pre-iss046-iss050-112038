@@ -1,0 +1,56 @@
+{
+  "_note": "约束模式 · 验收基线。数字变了不等于坏，但**必须有人明确说『这是我有意改的』再更新本文件** —— 期望值写死在别处（prompt / 文档）会让回归变成随机变红，而会随机变红的测试比没有测试更坏。",
+  "_how_to_update": "改完协议/检查器之后，跑 node .check/acceptance.js，若报 DRIFT 且你确认是有意改动，就把下面这些数字改成实测值。",
+  "check": { "total": 8, "fail": 0, "unverified": 0 },
+  "mutate": { "hit": 96, "total": 96 },
+  "batteries": {
+    "mutations-independent.js": {
+      "runner": "self", "total": 14, "hit": 13, "escape": 1,
+      "falsered": 0, "crash": 0, "miss": 0,
+      "why_escape": "它自己的标注错（C1/C2 口径对照那条期望报红，而那是合法改动）"
+    },
+    "mutations-fourth.js": {
+      "runner": "run-battery", "total": 27, "hit": 23, "escape": 3,
+      "falsered": 1, "crash": 0, "miss": 0
+    },
+    "mutations-fourth2.js": {
+      "runner": "run-battery", "total": 19, "hit": 18, "escape": 1,
+      "falsered": 0, "crash": 0, "miss": 0
+    },
+    "mutations-thirdparty2.js": {
+      "runner": "run-battery", "total": 41, "hit": 29, "escape": 9,
+      "falsered": 0, "crash": 0, "miss": 3,
+      "missKnown": ["N36", "N38", "N40"],
+      "missKnown_why": "2026-09-15 逐条核对：这三条的锚点都是 `skills/constraint-mode/SKILL.md` 这个**引用文本**。Wave 3 把 constraint-mode 降级为 MODULE.md，Wave 6 按 C5（活引用可达性）把 5 处引用改成 MODULE.md —— 引用必须指向真实存在的文件，所以这个改动是对的，锚点失配是它的**必然代价**，不是回归。本电池头部明写『这是证据快照，不是回归测试，不为了让它跑得通而改锚点』，故**不改电池**。改验收：失配按 ID 判，名单外的**新失配照旧判 FAIL**，名单内只显示不判红（否则一条永远红的断言会训练人忽略红色，正是本电池自己警告的形状）。**每改一次文档都要重看这份名单**：若锚点文本又变，会出现名单外的新失配。",
+      "missKnown_check": "判定新失配的命令：node .check/run-battery.js .check/mutations-thirdparty2.js 2>&1 | grep 锚点失配明细"
+    }
+  },
+  "selftest": {
+    "_note": "host-log.js 的合成用例（.check/selftest-host-log.js）。存在的理由：[99] 的 OK 分支、[98] 的 OK/FAIL 分支在真实环境里都等不到（前者要宿主先加载 hook，后者要那条日报跑到第二次），所以用合成日志把判定逻辑本身验一遍。**合成用例只证明判定逻辑对，不证明真实环境如何。** 第 36 条是**假阴性守门人**（Windows 反斜杠路径必须计入）—— 漏判比误判贵，误判报红会被查，漏判报「没有」会被信。第 43/44 条是 2026-09-15 加的**漏检守门人**：`judgeHookTrace` 里「unchecked>0 → 红」与「incomplete>0 → 红」两条分支真实环境**已经走不到**（探针污染的 12 行已归档、探针改走临时 TRACE），而不存在的分支和走不到的分支在验收表上长得一样。**第 48–52 条是 2026-09-16 加的取数层守门人**：`findSessionAcceptanceRuns` 原先在这份用例里**零覆盖**（连 import 都没有），而 ISS-051 那个「对 automation 结构性必然 FAIL」的假红就出在它身上 —— 它读错了通道（ACP 协议流里不记工具调用），恒返回 `[]`，被上层读成「没有执行」。**没被跑过的取数层，就是缺陷的温床。** 这三条把它的三种返回值逐个钉住：命中 / `[]`（确实没执行）/ `null`（归属不了，宁可说不知道）；另两条钉住新通道的两个形状依赖（时间戳 12 小时制换算、`cmdRunsAcceptance` 只认「执行」不认「读」）。**第 53 条是同日稍后加的假绿守门人**：拿 9-15 那个「直接执行」干净正例做探针时反查出 `cmdRunsAcceptance` 会把 `echo \"node <路径>\"`（只是把字打印出来）与 heredoc 正文（写进文件的数据）判成「执行过」——**方向是假绿**。第 49 条的「提到」用例本意就是挡这个，但它用的是 `echo \"见 .check/acceptance.js\"`，**里面没有 `node`**，于是根本没走到出错那条路（旧实现返回 false，看着是对的）：**用例写了，但没写到刀刃上。**",
+    "total": 53,
+    "hit": 53
+  },
+  "judge": {
+    "_note": "电池判定逻辑的自测（.check/battery-judge.js，10 条合成用例，其中 **6 条是守门人**：它们必须报红，报绿就是判据死了）。存在的理由同 selftest：判定里「名单外**新**失配 → 红」与「self 跑手不给明细 → 红」这两条分支**真实环境走不到**（现在 3 条失配全部已登记），而走不到的分支和不存在的分支在验收表上长得一样 —— 都是绿。**合成用例只证明判定逻辑对，不证明真实环境如何**：真实那一侧由 [3..6] 跑真电池提供。",
+    "total": 10,
+    "hit": 10
+  },
+  "c5count": {
+    "_note": "C5「同一路径在文档里被引用 N 处」的计数自测（.check/selftest-c5-count.js）。2026-09-15 加这个计数，起因：`skills/constraint-mode/SKILL.md` 在文档里被引用 **8 次**，而 C5 因为 `if (!refs.has(key))` 去重只报 **1 条**，我照它去修，**修完以为干净了、其实还有 7 处**。不是漏判（逐次修也能收敛），是**报告的形状与事实不符**。这条计数只在**输出文本**里，而 check-protocol.js 的 MUTATIONS 只判「C5 报不报红」—— **测不到文本**，所以必须单独一条用例。用例往 MODE.md 副本末尾追加 3 行同形失效引用，与 MODE.md 现有内容无关（靠「出现最多的路径」会随文档改动随机变红）。",
+    "total": 1,
+    "hit": 1
+  },
+  "automation": {
+    "_note": "判据在宿主那一侧：daemon.log 里 `[AutomationRecords] terminal run record written automationId=…, status=…`，**且必须带时间戳**（配对要用）。**认不出的 status 报 DRIFT，不报 OK** —— 不猜成成功。产出那一半的判据是 `.check/acceptance-ledger.txt`（acceptance.js 自己写的），由 pairRunWithLedger 按时间配对；配对会**滞后一次运行**（本次运行记录要等它跑完才落盘）。",
+    "_no_min_runs": "这里原来有个 min_runs 闸门（『日志里有 ≥1 条运行记录才算机制被证明』），已删。理由：那个计数是**日志窗口内**的，而日志按 10 MiB 滚动 —— 它有硬上限，日志一滚闸门就自己误报。『机制会跑』这个事实是**一次性测出来的**（2026-09-15 的探针 automation，宿主日志有 ACCEPTED 记录），它属于文档，不属于一个会随日志滚动的计数器。",
+    "id": "4ddc05b0-ef36-4c53-bb3a-e94b11c09d4e"
+  },
+  "hook": {
+    "_note": "判据在**宿主那一侧**：宿主日志里 [HookExecutor] spawn 的行中出现 .check[\\\\/]（**两种分隔符都要认**）。hook 自己的产出**不是判据，只是佐证**（硬规则二十八）—— 2026-09-15 我亲手伪造过 4 行 src=host。两侧打架时报 FAIL（信宿主）。",
+    "_exits_2026-09-15": "**「宿主不记返回值」是错的**（2026-09-15 20:1x 翻案）。宿主在 spawn 的**下一行**就写了 `[Warning] [HookExecutor] abnormal exit pid=… code=1 elapsed=195ms timedOut=false`，再下一行是 `[Info] Hook exited with **non-blocking** error code 1: …`（附 hook 完整输出）。**返回值一直在日志里，是我的正则只匹配了 spawn 行、没看下一行** —— 「判据认不出」的第四次。含义两条：① [99] 现在能交叉核对**宿主记的 code=1 次数 ↔ hook 自述的 verdict=hit 次数**，宿主侧不经过 hook，是真正的独立判据；② 宿主自己定性 **non-blocking**，所以 hook 是**报警器不是拦截器**（它本来就是 PostToolUse，写在那 28ms 里已经成功）。判据实现见 host-log.js 的 crossCheckHookExit。",
+    "_overturned_2026-09-15": "第三版据此报「宿主从未 spawn 过它 = hook 不生效」，并把这句写进了 SOUL / MEMORY / VERIFY 当结论用。**这是错的**，两个真因都在否定方向上：① 正则只认 `.check/`（正斜杠），而 Windows spawn 出来的是 `.check\\`（反斜杠）→ 当时实测 129 次**全部漏掉**，报成 0；② 自述读的是 `.check/hook.log`，而 hook 根本不写这个文件（它只写 TRACE 指向的 host-hook-spawns.log）→ 永远 0 行 = 永远「没发生」。第四版修好后实测：宿主 **140 次** spawn 指向 .check/，TRACE 产出 **148 行**（ok×140）。**结论翻案：hook 一直在跑。** 教训：漏判比误判贵 —— 误判报红会被查，漏判报「没有」会被信。",
+    "host_side_min": 1,
+    "trace_probe": "自述落点**不写死**，走指针链 settings.json -> hook 命令里指向 .check/ 的 .js -> 脚本里的 TRACE = '…'（findHookTrace，硬规则二十七）。链断必须给 why，不许静默 n=0 —— 静默的 0 会被读成「没发生」。",
+    "verdict_shapes": "ok / hit（命中已登记失败模式，rc=1）/ non-clean:rc=N（扫描错误或入口异常，**是空洞不是通过**）/ stdin-error / no-payload / bad-json（后三种是 payload 形状，不阻断，只留痕）"
+  }
+}

@@ -1,0 +1,179 @@
+================================================================================
+留证 · W18 J1 · 修 ISS-051：`[98]` 假红（判据读错了通道）
+时间：2026-09-16T02:02Z（10:02 GMT+8）
+作业：把 `[98]` 从「对 automation 结构性必然 FAIL」修成能给出真结论
+================================================================================
+
+§0 一句话
+--------------------------------------------------------------------------------
+`[98]` 说「automation 那一轮**没有执行** acceptance.js」。**这句话是错的** ——
+它确实执行了，只是**判据读错了通道**：读的是 ACP 协议事件流（不记工具调用），
+而工具调用记在**工作区级 CLI host 日志**里。
+
+§1 缺陷（ISS-051，high）
+--------------------------------------------------------------------------------
+automation 第一轮（2026-09-16 01:05:34Z 起，会话 17823d81，automationId 4ddc05b0）
+跑完之后，`[98]` 第一次从「未到点」变成可判 → 结果 **FAIL**，明细写：
+
+  这一轮 automation 的会话（17823d81-…）里**没有执行** `node .check/acceptance.js`
+  —— 提示词没跑到那一步，或命令被跳过。
+
+**三条反证**（都不是推断，是实测）：
+  ① `.check/audit/2026-09-16/audit-010807.txt` 在（mtime 01:11:28Z），内容是那次
+     ACCEPTANCE 全文，结论 `11 OK / 0 FAIL / 0 DRIFT / 1 UNVERIFIED` `EXIT=2`；
+  ② `.check/acceptance-ledger.txt` 在 **01:09:41.698Z** 有该轮写的一行
+     （`exit=2 ok=11`）—— 与 ① 的数值**完全吻合**；
+  ③ 那一轮还推进了未结项、落了 SEAL v6/v7。**工作做了、产物在、账本在。**
+
+§2 真因：不是「没跑」，是「判据读错了地方」
+--------------------------------------------------------------------------------
+`findSessionAcceptanceRuns`（`host-log.js:282` 旧版）读
+`logs/<日期>/sdk/conversations/<sessionId>.log`，用 `RE_SESS_CMD`
+（`"toolName":"Bash" … "rawInput":{"command":"…"`）挑命令。
+
+**实测该文件（38.5 MB）**：
+    acceptance.js   0 次
+    toolName        0 次
+    rawInput        0 次
+    "command"       0 次
+    event-machine:  90,271 次   ← 它是 ACP 协议事件流
+    唯一 1 次含 `Bash` 的行，是 `method:requests:result` 里嵌的 **automation 提示词原文**
+
+**对照**：我自己的会话 `34b3b3a5-….log`（128 MB）里上述串**各 24 次**。
+→ 那个形状**只存在于「我」的会话日志里**。所以这条判据**对任何 automation 会话
+结构性地必然 FAIL**，无论它做得多正确。
+
+**危害两条**：① 假红（而且按规格 `769-770` 行，假红比漏报贵 —— 它会训练人忽略红色）；
+② **归因指向错的地方**（同族 ISS-013/018/035/046，**第 6 次**）：明细引导去查
+「提示词」和「命令」，而这两处都是好的。
+
+§3 真正的通道：工作区级 CLI host 日志
+--------------------------------------------------------------------------------
+文件：`logs/<日期>/<工作区名>__<hash>.log`
+本轮的：`logs/2026-09-16/.workbuddy-ai__d4cc32b886a20ef977a4262d5d06524a.log`（1.77 MB）
+
+  首行：`Workspace Path: c:\Users\<user>\.workbuddy-ai`
+  含 sessionId 的行：`[SessionRunStateMachine] transition | sessionId=<uuid> | event=TOOL_STARTED | …`
+  含命令的行：`[BashTool] execute start | command="<全文>" | timeout=…`  —— 共 72 条
+  时间戳形状：`[16/9/2026 上午9:08:07.359]`（`D/M/YYYY 上午|下午h:mm:ss.SSS`）
+
+**三个必须处理的形状（都是实测踩出来的，不是设想的）**：
+
+  ① **归属只能靠自证**：`[BashTool]` 行**不含** sessionId；含 sessionId 的只有
+     `[SessionRunStateMachine]` 行。所以只有该文件里 sessionId **恰好唯一**且等于目标
+     时才可信。实测本文件 sessionId 唯一 = `17823d81`（1292 次）。
+     **反例**：`workbuddy__a75174….log` 混着两个会话（34b3b3a5 / 46398c8c），
+     用它就会错配 —— 所以「不唯一 → 返回 null」是**必须的**，不是保守。
+
+  ② **「执行」不是「提到」**：该文件里 `acceptance.js` 出现 27 次，但其中**执行**的
+     0 次；另有 2 条 `grep -n '…' .check/acceptance.js`（在**读**这个文件）。
+     用子串判断会把它们当成「跑了 acceptance」。**判据必须区分执行与读。**
+
+  ③ **间接调用**：那一轮真正执行的是
+     `cd /c/Users/<user>/.workbuddy-ai && bash skills/andyngo/scripts/andyngo-audit.sh; echo "AUDIT_SH_EXIT=$?"`
+     （时间 **2026-09-16T01:08:07.359Z**，与 `audit-010807.txt` 的文件名 `010807` **精确吻合**），
+     而 `skills/andyngo/scripts/andyngo-audit.sh:15` 是
+     `( cd "$ROOT" && node .check/acceptance.js 2>&1 )`。
+     → 顶层命令**不含** `node .check/acceptance.js`，必须走**一层脚本指针链**。
+
+**旁证（独立于日志）**：automation 会话的 `tool_call` 事件时间分布 ——
+`01:07=24 · 01:08=22 · 01:09=0 · 01:10=0 · 01:11=12`。
+**01:08 发起一个命令 → 静默 2 分钟 → 01:11 拿到结果**，正是 acceptance（约 3 分钟）的耗时特征。
+
+**顺带纠正一条**：`[BashTool]` 行只有 `pid` 与 `callId`，**没有 sessionId**；
+`workbuddy__a75174….log` 里 `ci-2` 出现 67 次，**全部是「别的会话在命令文本里提到 ci-2」**
+（例如 `echo "=== ci-2 最近状态机事件 ==="`），不是归属标记。
+另：`instanceId` **不能**当会话标识 —— daemon.log 的 `[ConversationPool]` 记录显示
+`34b3b3a5`（**我的会话**）与 `17823d81`（automation）**都是 `ci-2`**，它是会被复用的实例槽位。
+（这条修正了 SEAL v6/v7 里「ci-2 = automation」的推理链 —— 结论侥幸对，判据不成立。）
+
+§4 修法（只落在取数层，判定层一字未改）
+--------------------------------------------------------------------------------
+`host-log.js`：
+  1. 新增 `parseWorkspaceTs` —— 认 `[D/M/YYYY 上午|下午h:mm:ss.SSS]`（12 小时制 + 中文上下午）。
+     `parseHostTs` 只认 ISO 串与毫秒数，**认不出这个形状**；认不出返回 null，
+     null 又被 `causalPair` 的 `Number.isFinite(c.t)` 过滤掉 → 「执行过」当场变「没执行」。
+  2. 新增 `cmdRunsAcceptance(cmd, wsRoot)` —— 只认 `node|bash|sh|source <目标>` 里的**目标**；
+     目标若是别的脚本，读它看内容（**一层**指针链）。不硬编码 `andyngo-audit.sh`（硬编码会腐烂，硬规则二十七）。
+  3. 新增 `looksLikeWorkspaceLog(p)` —— 只读文件头 8 KB 找 `Workspace Path:`（预筛，避免整读无关大文件）。
+  4. 重写 `findSessionAcceptanceRuns` 内部 —— 扫 `logs/<day>/` 顶层 `.log`
+     （**必须 `readdirSync`**：工作区日志是 `.workbuddy-ai__*.log`，以 `.` 开头 = 隐藏文件，
+     `ls *.log` 看不到它），用**已有** `eachLine` 分块读，**自证归属**后取最后一条命中命令。
+     **返回值三态**：`null`（没有可信文件 → 上层 UNVERIFIED）/ `[]`（可信但没有执行
+     → 上层 FAIL，真红保留）/ 非空数组（命中）。
+  5. 修 `combinePair` 的 `causalTxt`（见 §6）。
+  6. `RE_SESS_CMD` 停用但**保留**，注释标明它是「形状认错 → 假阴性」这次事故的物证。
+
+**为什么修在取数层而不是判定层**：`causalPair` 的 `[]` 分支断言的是「确实没执行」，
+那是**正确行为**（自测 24 钉着它）。若改判定层，会把「真·没执行」一起降级成 UNVERIFIED
+—— 往另一个方向出错（假绿/漏报）。所以第三种情况必须在**上游**就与 `[]` 分开。
+
+§5 实测
+--------------------------------------------------------------------------------
+修前（audit-013123.txt）：
+    [98] FAIL   … · **因果已确认**（那一轮的会话里执行过 `node .check/acceptance.js`）
+    结论：11 OK / 1 FAIL / 0 DRIFT / 0 UNVERIFIED      EXIT=1
+
+修后（audit-094900.txt / audit-095554.txt）：
+    [98] OK     … · 配对：账本行比命令执行晚 94s（窗口内候选 4 行） · **因果已确认**
+    [ 7] OK     命中 52 / 失败 0（共 52 条；基线 52/52）
+    结论：12 OK / 0 FAIL / 0 DRIFT / 0 UNVERIFIED      EXIT=0
+
+**94s 精确吻合**：命令 `01:08:07.359Z` + 94s = `01:09:41.7Z` = 账本行 `01:09:41.698Z`。
+**这不是「降级成不知道」，是给出了真结论。**
+
+定向验证（`node -e`，未改文件）：
+    parseWorkspaceTs  上午9→9 · 下午3→15 · 下午12→12 · 上午12→0 · 认不出→null   全对
+    cmdRunsAcceptance node 直接→true · bash audit.sh→true（指针链）·
+                      grep 读文件→false · echo 提到→false · 脚本不存在→false   全对
+    findSessionAcceptanceRuns 真实数据 → 数组(1)，那条 `bash …andyngo-audit.sh` @ 01:08:07.359Z
+
+自测：**47 → 52 条**（新增 48–52），全绿。
+  **为什么必须补**：`findSessionAcceptanceRuns` 原先在这份用例里**连 import 都没有**
+  —— **零覆盖**。而假红就出在它身上。**没被跑过的取数层，就是缺陷的温床。**
+  新增：48 时间戳换算 / 49 只认执行不认读 / 50 命中 / 51 只有 grep → `[]` /
+  52 sessionId 不唯一 → `null`。
+`baseline.json`：`selftest.total/hit` 47 → 52（**不同步就是 DRIFT**）。
+
+§6 顺带抓到的第二个缺陷：`[98]` 同一行自相矛盾
+--------------------------------------------------------------------------------
+修前那一行**同时**说 FAIL 和「因果已确认」：
+    `[98] … FAIL … · **因果已确认**（那一轮的会话里执行过 node .check/acceptance.js）`
+根因：`causalPair` 的两个 FAIL 分支也返回 `causal: true`（那里它的语义是
+「因果链**已判定**」，不是「因果成立」），而 `combinePair:389` 把它一律渲染成
+「因果**已确认**（执行过）」。
+**为什么 47 条没抓到**：自测 35 只断言了 `state` 与 `why`、**没断言 `causalTxt`**
+—— FAIL 分支的 `causalTxt` 是**零覆盖**的。已改为按 `q.state` 分四支渲染。
+
+§7 残留与未验（不夸大）
+--------------------------------------------------------------------------------
+- `[98]` 明细的措辞仍说「那一轮的会话里执行过 `node .check/acceptance.js`」，
+  而实际顶层命令是 `bash …andyngo-audit.sh`（脚本内部调 acceptance）。
+  **语义正确**（确实执行了 acceptance），但措辞不够精确 —— 未改，登记为残留。
+- **只有一天的数据**：9-16 是本机 automation **第一次**真正跑（daemon.log 里
+  `createdBy=automation` 只出现这一次）。所以「换通道后长期稳定」**没被证明**。
+- **9-15 有一个干净正例**（`logs/2026-09-15/.workbuddy-ai__*.log`，sessionId=70cb40a8，
+  顶层命令直接是 `node .check/acceptance.js`）—— 但**没跑过**新代码去验它。
+  它是「直接执行」那一支的**可用真实样本**，下次可拿它做跨日验证。
+- **`--check` 的编号唯一性**：本次新增 1 条 EVT + 若干 ISS/CHG，需重跑确认。
+- **`[99]` 的数字随编辑次数增长，不是常量**，不要抄进文档。
+
+§8 冻结件核对（一个字节没动）
+--------------------------------------------------------------------------------
+    .check/andyngo-integrity.js   e8d1386e91e983c4961f5796a2486558   ✓ 与基线一致
+    .check/check-protocol.js      4f0aa2d0c63c2d1a46bd3e86cdbeebc6   ✓ 与基线一致
+改动文件（新 md5）：
+    .check/host-log.js             3f3192d5bc8b3de8482ae558915c3a1d
+    .check/selftest-host-log.js    3ec79d94fb5919cfc0472765748e9a43
+    .check/baseline.json           a06b4a2f6ffdda55a4cef5f6151140ae
+
+§9 这一版最该被记住的三句
+--------------------------------------------------------------------------------
+  1. **「判据读错了地方」比「判据说错话」更难发现** —— 因为输出的形状完全正常，
+     只是一个必然为真的否定。**通道错了，判据的一切逻辑都是白搭。**
+  2. **零覆盖的函数是缺陷的温床** —— `findSessionAcceptanceRuns` 连 import 都没有，
+     47 条自测全绿，而它是唯一读错通道的那个。**没被跑过的取数层最危险。**
+  3. **子串能证明「提到」，不能证明「执行」** —— 那 27 次 `acceptance.js` 里，
+     执行的 0 次。**判据要认形状，不要认子串**（DEC-022 的又一实例）。
+
+================================================================================

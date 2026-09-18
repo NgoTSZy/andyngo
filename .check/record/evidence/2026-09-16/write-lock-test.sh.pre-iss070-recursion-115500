@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# write-lock.js 的自测 —— 把 12 个出口逐个钉住。
+#
+# 为什么必须有：锁的失效方向是**静默**的 —— 一把坏锁不会报错，
+# 只会让两个写者同时进临界区，然后**丢掉其中一份更新**（本项目踩过 3 次并行 Edit）。
+# 而第一版锁**第一次跑就有一个真缺陷**（过期按调用方的 TTL 判 → 长 TTL 的调用方
+# 永远看不到别人的锁过期），所以「跑过一遍」不是可选项。
+#
+# 只动 `.check/.write-lock` 与 `.check/.write-lock.takeover`，跑完不残留。
+# 退出码：0 全通过 / 1 有失败 / 2 **拒跑**（有人正持锁，见下）。
+set -u
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$ROOT" || exit 1
+L="node .check/write-lock.js"
+fails=0
+ok()   { echo "PASS  $1"; }
+bad()  { echo "FAIL  $1  （期望 rc=$2 实得 rc=$3）"; fails=$((fails + 1)); }
+# 量退出码**不经管道**（管道拿到的是 tail 的状态，恒 0 —— 本项目踩过）
+chk() { # chk <期望rc> <描述> <命令…>
+  local want="$1" desc="$2"; shift 2
+  "$@" >/dev/null 2>&1; local got=$?
+  [ "$got" = "$want" ] && ok "$desc" || bad "$desc" "$want" "$got"
+}
+out() { "$@" 2>&1; }
+
+# ---- 起手：**不许删别人的锁**（ISS-060，2026-09-16）--------------------------------
+# 原写法是 `rm -f .check/.write-lock .check/.write-lock.takeover`，注释写「起手清干净
+# （上一轮异常退出可能留锁）」。**但它和生产共用同一个锁文件路径** ——
+# 于是「跑一次锁自测」= **静默销毁别人正持有的锁**，而它自己的第 16 项还要求「跑完无残留」，
+# 所以它连"发现"都做不到。
+# **最坏的不是这次，是常态**：automation §0.3 先 `acquire`、§一.6 再跑这个自测
+# → **每一轮都把自己刚取的锁删掉**，而 §一 之后的全部「改源文件」都在**无锁**状态下发生，
+# 且**每一步都报成功**。锁失效的方向本来就是静默的，这里连"锁还在"这个前提都被悄悄拿掉了。
+# 修法：有人**持有**（未过期）就**拒跑**（rc=2，同 DEC-013 的「拒跑」）；
+# 只有「存在但已过期」才允许清 —— 那种锁本来就会被下一个取锁者抢占（takeover）。
+# **不引入任何「跳过守卫」的开关**（DEC-023）。
+#
+# 【2026-09-16 续修】拒跑之后暴露一个可用性问题：**被中断的自测留下的锁会挡住自测本身**
+# （实测：一次被沙箱拦下的执行停在 `selftest:testA`，30 分钟 TTL 内自测永远拒跑）。
+# 解法不是「放宽守卫」，是**给本测试的持有者一个专属命名空间**：
+# 本脚本一律用 `selftest:` 前缀，于是**凡 holder 以 `selftest:` 开头的锁，必然是本测试
+# 自己（可能被中断）留下的** —— 可以安全清掉；**其它任何 holder 一律不碰**。
+# 这样「谁有权删」有了确定答案，而不是靠「看起来像不像僵尸」。
+# （同 DEC-030 的教训：判据不能由调用方自己发通行证 —— 但「自己的命名空间」不是通行证，
+#   它是一个**可机械判定**的归属，任何人都能验。）
+if [ -e .check/.write-lock ]; then
+  HOLD=$(sed -n '1p' .check/.write-lock 2>/dev/null | awk '{print $1}')
+  case "$HOLD" in
+    selftest:*)
+      echo "NOTE  起手发现**本测试自己**留下的锁（holder=$HOLD，上次被中断）→ 清掉"
+      rm -f .check/.write-lock .check/.write-lock.takeover
+      ;;
+    *)
+      if out $L status | grep -q "^LOCK held"; then
+        echo "SKIP  写权锁自测**拒跑**：有人正持有锁（holder=$HOLD）。"
+        echo "      本测试与生产**共用同一把锁文件**，跑它会删掉别人的锁（ISS-060）。"
+        echo "      要么等它释放，要么先确认它是僵尸锁再手动清理。"
+        out $L status | sed 's/^/      /'
+        echo "----"
+        echo "write-lock 自测：拒跑（rc=2，**未动任何文件**）"
+        exit 2
+      fi
+      echo "NOTE  起手发现**已过期**的僵尸锁（holder=$HOLD），清掉（它本来就会被下一个取锁者抢占）"
+      rm -f .check/.write-lock .check/.write-lock.takeover
+      ;;
+  esac
+fi
+
+chk 0 "1 status 空闲 → 0"                     $L status
+chk 0 "2 acquire A → 0"                       $L acquire selftest:testA 30
+chk 2 "3 acquire B 被占 → 2（拒跑，不是失败）"  $L acquire selftest:testB 30
+chk 2 "4 release B 不是自己那把 → 2"           $L release selftest:testB
+chk 0 "5 status 读到持有者 → 0"                $L status
+chk 0 "6 release A → 0"                       $L release selftest:testA
+chk 0 "7 status 又空闲 → 0"                    $L status
+chk 0 "8 acquire A 声明 60ms → 0"              $L acquire selftest:staleA 0.001
+sleep 2
+chk 0 "9 acquire B 抢过期锁 → 0（takeover）"    $L acquire selftest:staleB 30
+chk 0 "10 release B → 0"                      $L release selftest:staleB
+chk 4 "11 缺参数 → 4（参数错）"                 $L acquire
+chk 4 "12 非法 ttl → 4"                        $L acquire who 0
+
+# 语义断言（不只是退出码）：
+if out $L acquire selftest:semantic 30 | grep -q "我声明=30min"; then ok "13 取得锁时打印自己的声明"; else bad "13 取得锁时打印自己的声明" "含 我声明=30min" "(不含)"; fi
+if out $L status | grep -q "持有者声明=30min"; then ok "14 status 显示持有者声明的 TTL"; else bad "14 status 显示持有者声明的 TTL" "含 持有者声明=30min" "(不含)"; fi
+out $L release selftest:semantic >/dev/null
+if out $L status | grep -q "^LOCK free"; then ok "15 释放后回到 free"; else bad "15 释放后回到 free" "LOCK free" "(不是)"; fi
+
+# 残留检查：跑完不许留锁文件（否则下一轮开工会被一把僵尸锁挡住）
+if [ -e .check/.write-lock ] || [ -e .check/.write-lock.takeover ]; then
+  echo "FAIL  16 跑完不应残留锁文件"; fails=$((fails + 1))
+else ok "16 跑完无残留"; fi
+
+# ---- 17 守门人：**持锁时本测试必须拒跑，且一个字节都不许动**（ISS-060 的回归）------
+# 这一项是**自指的**：它取一把锁，然后**再跑一次本脚本**，断言那次 rc=2 且锁文件逐字节不变。
+# 没有它的话，ISS-060 修完之后没人能保证它不会退回去 —— 而它的失效方向是**静默**的
+# （跑一次就把别人的锁删了，输出一切正常）。
+# 递归只有一层：内层一进来就撞上守卫、在动任何文件**之前**退出。
+out $L acquire selftest:guard 30 >/dev/null
+BEFORE=$(cat .check/.write-lock 2>/dev/null)
+bash .check/tests/write-lock-test.sh >/tmp/wlt-inner.out 2>&1; INNER_RC=$?
+AFTER=$(cat .check/.write-lock 2>/dev/null)
+if [ "$INNER_RC" = "2" ] && [ -n "$AFTER" ] && [ "$BEFORE" = "$AFTER" ]; then
+  ok "17 持锁时自测拒跑（rc=2）且**未删锁**（逐字节不变）"
+else
+  bad "17 持锁时自测拒跑且未删锁" "rc=2 且锁不变" "rc=$INNER_RC 前[$BEFORE] 后[$AFTER]"
+fi
+out $L release selftest:guard >/dev/null
+if [ -e .check/.write-lock ]; then
+  echo "FAIL  18 守门人用完应把 guard 锁放掉"; fails=$((fails + 1))
+else ok "18 守门人用完无残留"; fi
+
+echo "----"
+if [ "$fails" -eq 0 ]; then echo "write-lock 自测：18 项全通过"; exit 0; fi
+echo "write-lock 自测：$fails 项失败"; exit 1

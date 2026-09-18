@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+ROOT="${PROJECT_ROOT:-$PWD}"
+DATE=$(date -u +%Y-%m-%d)
+OUT="$ROOT/.check/audit/$DATE"
+mkdir -p "$OUT"
+
+TS=$(date -u +%H%M%S)
+REPORT="$OUT/audit-$TS.txt"
+
+{
+  echo "=== ACCEPTANCE ==="
+  if [[ -f "$ROOT/.check/acceptance.js" ]]; then
+    ( cd "$ROOT" && node .check/acceptance.js 2>&1 )
+    echo "EXIT=$?"
+  else
+    echo "SKIP 无 acceptance.js"
+  fi
+} > "$REPORT" 2>&1
+
+cat "$REPORT"

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RECORD_ROOT="${RECORD_ROOT:-$PWD/.check/record}"
+DATE=$(date -u +%Y-%m-%d)
+TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+LOG="$RECORD_ROOT/eventlog/$DATE.txt"
+
+mkdir -p "$(dirname "$LOG")"
+
+LAST=$(grep -oP '^EVT \K\d+' "$LOG" 2>/dev/null | tail -1 || echo 0)
+SEQ=$(printf "%03d" $((10#$LAST + 1)))
+
+EV="${5:-}"
+if [[ -n "$EV" && "$EV" != "--" && ! -f "$EV" ]]; then
+  echo "FAIL evidence_ptr 不存在: $EV" >&2
+  exit 1
+fi
+
+printf "EVT %s %s %s %s %s %s %s\n" \
+  "$SEQ" "$TS" "$1" "$2" "$3" "$4" "$5" >> "$LOG"
+
+echo "EVT $SEQ $TS $1 $2 $3 $4 $5"

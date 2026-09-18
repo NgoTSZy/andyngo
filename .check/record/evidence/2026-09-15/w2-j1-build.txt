@@ -1,0 +1,39 @@
+# W2 J1 · 22 个文件落盘证据
+
+时间：2026-09-15T13:52Z
+命令：`node <temp>/andyngo-manifest.js skills/andyngo .check/record/evidence/2026-09-15/manifest-build.json`
+
+## 计数（实测，非声明）
+
+| 判据 | 实测 | 规格自报 | 一致 |
+|---|---:|---:|---|
+| 文件数（`ls -R skills/andyngo/ \| grep -c '\.md\|\.sh'`） | **22** | 20 | **否，差 +2** |
+| 目录数 | **10** | 6 | **否，差 +4** |
+| 总字节 | 25,624 | — | — |
+| 总行数 | 880 | — | — |
+
+## 逐类计数
+
+| 位置 | 实测 | 规格清单 |
+|---|---:|---:|
+| `SKILL.md` | 1 | 1 |
+| `references/` 根层 | 7 | 7 |
+| `references/A-discovery/` | 3 | 3 |
+| `references/B-execution/` | 2 | 2 |
+| `references/C-assurance/` | 3 | 3 |
+| `references/D-evolution/` | 2 | 2 |
+| `assets/` | 1 | 1 |
+| `scripts/` | 3 | 3 |
+| **合计** | **22** | **22**（但规格正文写「共 20 个文件」） |
+
+**规格内部矛盾**：第二部分树状图逐行列出的是 **22** 个文件，末尾却写「共 20 个文件 + 6 个目录」，
+第四部分验证第 1 项也期望 `→ 应为 20`。**逐行清单才是真值，两个汇总数字都是错的。**
+
+目录同理：树状图里出现的目录是 10 个
+（`skills/`、`skills/andyngo/`、`references/`、`A-discovery/`、`B-execution/`、`C-assurance/`、
+`D-evolution/`、`assets/`、`artifacts/`、`scripts/`，另有 `.check/` 侧 6 个），
+规格末尾写「6 个目录」。
+
+## 全量 Manifest
+
+见同目录 `manifest-build.json`（逐文件 md5 + 字节 + 行数）。

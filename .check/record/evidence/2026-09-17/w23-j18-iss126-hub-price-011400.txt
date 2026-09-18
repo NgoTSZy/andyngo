@@ -1,0 +1,151 @@
+# W23 J18 · ISS-126 留证 · `[10] hub 标价一致性 FAIL` 的归因
+
+ts: 2026-09-17T01:14Z（本地 09:14）
+写者: B（W23 J18）· 写锁 W23-J18-ISSCLEAR
+
+## §0 现象
+
+本轮最终验收 `[10] hub 标价一致性` = **FAIL**：
+
+    登记 22 本 · 磁盘 23 本 · 数值不一致 1 · 缺登记 0
+    x andy  表 2636/14711  ≠  实测 2636/15155
+    表头合计 53862/154219 ↔ 表内逐行相加 53862/154219 一致（22 行）
+
+连跑 3 次（01:13:03Z ×3）**逐字相同** → **不是瞬态抖动**。
+
+## §1 根因：另一个会话正在创建 `skills/andy`
+
+`find skills/andy -printf` 实测 mtime（本地时间）：
+
+    09:05:05  scripts/andy-audit.sh · scripts/andy-security-scan.sh
+    09:05:20  SKILL.md
+    09:06:13  scripts/andy-archive.sh · scripts/andy-dream.sh
+    09:06:26  scripts/andy-record.sh
+    09:09:17  scripts/andy-design-setup.sh
+    09:09:44  references/andy-design-pool.md
+
+而 `skills/hub/routes.md` 的 mtime = **09:07:12**。
+
+→ **那个会话在 09:07:12 把 andy 登记进 routes.md（含标价 14,711），
+随后 09:09:17 / 09:09:44 又给 andy 加了两个文件，没有重算。**
+
+`[10]` 第一次跑时（约 01:05Z）报 `数值不一致 2`，手动跑 `price.js --check`
+报 `数值不一致 0`，第二次跑报 `1` —— **读数随那个会话的写入进度变化**，
+这是「外部正在写」的指纹。
+
+## §2 与本轮无关（本轮的可写面）
+
+本轮改动的文件（全部在 `.check/` 下 + 一个桌面启动器）：
+
+    .check/record/newid.js · .check/run-battery.js · .check/host-log.js
+    .check/acceptance.js · .check/selftest-host-log.js · .check/baseline.json
+    .check/record/hook-registry.md · .check/record/issues.md · .check/record/changes.md
+    .check/record/exit-codes.md · .check/record/eventlog/2026-09-17.txt
+    .check/record/tmp/* · C:/Users/<user>/Desktop/reply-to-B.cmd
+
+**从不碰 `skills/`**。`skills/andy` 的创建与本轮无因果关系。
+
+## §3 判定：不碰 `routes.md`（两条独立理由）
+
+### 理由① 会撞写
+
+`node .check/write-lock.js status` 全程只显示我的一把锁：
+
+    LOCK held holder=W23-J18-ISSCLEAR age=4510s 持有者声明=120min 已过期=否 since=2026-09-16T23:57:53Z pid=22036
+
+那个会话**没有取写锁**却在写 `routes.md`（09:07:12）。
+我改 = **ISS-120 的形状**（同一文件两个写者，静默丢更新）。
+
+### 理由② 会制造假绿（决定性）
+
+`price.js --check` **只比数字、不比散文** —— `routes.md` 维护节原文：
+
+> ② **`--check` 只比对表里的数字，不比对表里的散文**
+
+把 `14,711` 改成 `15,155` 会让 `[10]` 转绿，**而同一段散文同时写着**：
+
+    routes.md 散文说                             实测
+    --------------------------------------------  -----------------------------
+    `andyngo` 的 19 个 `references/*.md`          17  （find -name '*.md' 计数）
+    `andy` 的 24 个                                22  （同上）
+    `andy` 由 `andyngo` 派生：21 改名复制 + 10 新写 = 31
+                                                  31  （find -type f 计数）✓
+
+**两本都差 2** → 那个会话处于**中间态、尚未收尾**。
+**绿了但事实仍不符 = 假绿** —— 本仓库的优先级是「**假绿比假红坏**」
+（假红至少还有判据在叫）。
+
+## §4 这是 routes.md 自己记过的同一形状（第五次）
+
+`routes.md` 的维护节逐条记着「改完没重算标价」：第二、三、四次分别是
+`andyngo/SKILL.md`（16:22）· `andyngo-glossary.md`/`andyngo-security-scan.sh`（18:42）·
+`andyngo-record.md`（W23 J14 · 19:35）。**本条是第五次**，
+唯一的新意是**触发者是另一个会话**。
+
+## §5 处置
+
+- **只记录 · 不修**（`routes.md` 是那个会话的在写面）
+- **不改任何判据** —— `[10]` **判对了**：`routes.md` 确实与实测不符，
+  这是**真红不是假红**
+- SEAL 如实写 `11 OK / 1 FAIL / 0 DRIFT / 0 UNVERIFIED`
+
+## §6 触发条件（下次一定还会遇到）
+
+任何**外部会话**在 `skills/` 下增删 skill、或改了 skill 内容而没重算
+`routes.md` 标价时，`[10]` 会红。
+**判据面越出「本轮改动」**这一点与 **ISS-123**（规格引用用户桌面 →
+用户整理一次桌面就变红）同族。
+
+## §7 未做（诚实登记）
+
+- **未确认那个会话是否已经收尾** —— 我只能看到「09:09:44 之后没再写」。
+  若它**已经收尾**，则这条红会**一直挂着**直到有人重算
+  （`price.js` **没有写入模式**，只有 `--check`/`--desc`/`--inject`，
+  所谓「重算」是人工手抄）。
+- **未给 `[10]` 加「这本 skill 是否正在被写」的提示** —— 考虑过
+  （形状同 `run-battery.js` 的 `BASE-RED` 只报告行），但它**不是判据缺陷**
+  （判据判对了），为一次外部事件加打印**不是最小改动**，故不加。
+
+## §8 同一根因的第二个症状：X1（`exit-codes.md` 登记）
+
+**实测**：`node .check/probe-crossref.js --scan` 报 `[X1] HIT 检查 26 处 · 命中 2`
+（`skills/andy/scripts/andy-audit.sh` · `andy-dream.sh` 含 `exit 2` 未登记）· **RC=1（真红）**。
+
+**★ 与 `[10]` 处置方向相反，判据同一条**：
+
+    症状            缺口形态        处置     理由
+    -------------   -------------   ------   ------------------------------------------
+    [10] 标价       数字对不上      不修     改数字 = 假绿（--check 只比数字不比散文）
+    X1 登记         登记缺失        修       补登记 = 事实陈述，不改 andy 一个字节
+
+判据同一条：**改动不得让「判据 ↔ 事实」的关系变松**。
+
+**修法**：`ins-line.js`（本轮新建的同族第五件）在 `exit-codes.md` 插入 3 行
+（`andy-audit.sh` · `andy-dream.sh` · `ins-line.js` 自己）→ 51 → 54 行 →
+复跑 `检查 27 处 · 命中 0` · RC=0。
+
+**★ 但我自己的两处过程偏差，如实记**：
+
+1. **管道吞退出码**：第一次测 X1 时用 `node ... --scan | tail`，`echo $?` 取的是
+   **`tail` 的退出码** → 把 **rc=1 的真红误读成 rc=0**。改用
+   `node ... --scan > 文件; echo $?` 才看到 rc=1。
+2. **估时间而不是取时间**：CHG-248/249/250 与 ISS-126 收尾段用了 `01:26Z`、
+   ISS-127 用了 `01:28Z`，而 `date -u` 实测分别是 `01:23Z` / `01:25Z` —— **超前 2–3 分钟**。
+   本仓库的规矩是「时间口径一律 `date -u` 实测」，我**先写正文、后取时间**，
+   于是填了估计值。教训：**写 ts 之前先取时间**，不是「落账时再对」。
+
+**★ 处置到一半，目标又动了**：补登记 2 处之后复跑变成 `检查 28 处 · 命中 1`
+（`andy-record.sh`）。`find` 实测那个会话仍在活跃写入（`09:21:54` · `09:22:09` ×2 ·
+`routes.md 09:23:06`）→ **停止逐个追**，落 **ISS-127** 记这个结构性缺口
+（X1 分不出「真缺口」与「半成品瞬时状态」）。
+
+## §9 `[10]` 的最终读数（本条的主题）
+
+外部会话在 `01:13Z`（我测到 FAIL）之后、`01:20Z` 之前**自行重算**了 `routes.md` 标价
+（`[98]` 读到 `01:20:21.332Z` 那次 automation 验收 `ok=12`；该文件磁盘 md5
+`b66ae0a7` → `f6f4b354`）。复跑完整验收：
+
+    [10] hub 标价一致性   OK   登记 22 本 · 磁盘 23 本 · 数值不一致 0 · 缺登记 0
+    结论：12 OK / 0 FAIL / 0 DRIFT / 0 UNVERIFIED      ACCEPT_RC=0
+
+**ISS-126 因此 `open → resolved`**（外部瞬态已消失，且处置原则被实测验证）。

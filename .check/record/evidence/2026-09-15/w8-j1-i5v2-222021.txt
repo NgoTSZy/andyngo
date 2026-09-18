@@ -1,0 +1,105 @@
+===== I5 v2 落地 · 双向测全记录 =====
+时间: 2026-09-15T14:20:21Z
+背景: I5 原为「事件数 == 派发数」，分母无处可查 → 恒 UNVERIFIED（ISS-005）
+用户裁决: 按方案 A —— 「派发」= 一次有合规留证的作业（DEC-007）
+
+----- 一 · 定义（写进判据头部注释，可追溯）-----
+A = 合规留证集 = <evidence/<日期>>/ 下 basename 匹配 ^w\d+-j\d+-.*\.txt$
+B = 行引用集   = 各行 evidence_ptr 的 basename（排除 --）
+D1 每条行的 evidence_ptr ≠ --                  （记账必须有留证）
+D2 每个 A 成员被恰好一行引用（无孤儿、无重复）    （干活必须记账）
+D3 每条行的留证 basename ∈ A，或在 dispatch-exemptions.md 里逐条登记
+另加：悬空豁免（登记了却找不到对应行）也报 FAIL —— 防止登记表变成单方面清单
+
+----- 二 · 判据改动 -----
+$ md5sum .check/andyngo-integrity.js
+9e8964d11a9f130e796c8ad478ad5747 *.check/andyngo-integrity.js
+$ wc -l .check/andyngo-integrity.js
+168 .check/andyngo-integrity.js
+豁免表路径改为可用环境变量 ANDYNGO_EXEMPTIONS 覆盖 ——
+  否则判据自己无法被测试（夹具会写进真记录）。同 hook 的 IMMUNITY_TRACE 做法。
+
+----- 三 · 现盘实跑（I5 从恒 UNVERIFIED 变为真判据）-----
+===== andyngo · 事件流完整性校验 =====
+目标: .check/record/eventlog/2026-09-15.txt
+[I1] 字段数 = 8                   OK          7 行全部 8 字段
+[I2] seq 连续                    OK          7 条 seq = 001 002 003 004 005 006 007
+[I3] evidence_ptr 存在           OK          全部 evidence_ptr 真实存在（`--` 已放行）
+[I4] ts 单调递增                   OK          7 条 ts 非降
+[I5] 事件行 ↔ 作业留证 双向单射           OK          A(合规留证)=5 B(事件行)=7 双向单射成立 · 豁免 2 条
+---- 豁免（逐条打印，SEAL 铁律：豁免必须逐条、必须写原因、必须打印）----
+EXEMPT  EX-001 EVT 005 2026-09-15T14:19Z 留证文件名 `r2-card-coverage-220801.txt` 不符合作业留证约定 `w<wave>-j<job>-<slug>.txt`。原因：EVT 005 写入于 14:09:20Z，而该约定于 14:19Z 随 I5 v2 确立 —— **约定晚于该行**。事件流 append-only，改写 `evidence_ptr` 等于改历史，故不改。豁免范围仅限「文件名」一项。
+EXEMPT  EX-002 EVT 007 2026-09-15T14:19Z 留证文件名 `judge-hardening-220801.txt` 同上原因（写入于 14:14:09Z，早于约定确立）。豁免范围仅限「文件名」一项。
+----
+结论：5 OK / 0 FAIL / 0 UNVERIFIED
+RC=0
+RC=0
+
+----- 四 · 双向测：5 种该红的形状 + 该绿的绿 + 反向复现 + 夹具隔离 -----
+$ bash i5-bidirectional-test.sh <repo> <判据js> <tmp>
+===== I5 v2 双向测 =====
+
+--- G1 该绿的绿：真事件流 + 真豁免表 → I5 OK / RC=0 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           OK          A(合规留证)=5 B(事件行)=7 双向单射成立 · 豁免 2 条
+  结论：5 OK / 0 FAIL / 0 UNVERIFIED
+  RC=0
+  [PASS] 现盘全绿
+
+--- R1 该红的红：豁免表不存在 → D3 必须报 2 条不合约定 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D3 未按约定命名且未登记豁免: EVT 005(r2-card-coverage-220801.txt), EVT 007(judge-hardening-220801.txt) ｜ A=5 B=7 豁免=0
+  结论：4 OK / 1 FAIL / 0 UNVERIFIED
+  RC=1
+  [PASS] 缺豁免表时报 FAIL
+
+--- R2 该红的红：新增一行、留证不合约定 → D3 必须点名 EVT 008 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        留证目录不存在: ../AppData/Local/Temp/i5-test/r2/record/evidence/2026-09-15；D3 未按约定命名且未登记豁免: EVT 008(eventlog-verifytest-135358.txt) ｜ A=0 B=8 豁免=2
+  结论：4 OK / 1 FAIL / 0 UNVERIFIED
+  RC=1
+  [PASS] 新行不合约定 → FAIL
+
+--- R3 该红的红：留证目录里多一个没人引用的合规文件 → D2 孤儿 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w9-j9-orphan.txt ｜ A=1 B=7 豁免=2
+  结论：4 OK / 1 FAIL / 0 UNVERIFIED
+  RC=1
+  [PASS] 孤儿留证 → FAIL
+
+--- R4 该红的红：两行引用同一留证 → D2 重复引用 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 被重复引用: w1-j1-probe.txt；悬空豁免（登记了却找不到对应行）: 005, 007 ｜ A=1 B=2 豁免=0
+  结论：4 OK / 1 FAIL / 0 UNVERIFIED
+  RC=1
+  [PASS] 重复引用 → FAIL
+
+--- R5 该红的红：某行 evidence_ptr = `--` → D1 记账必须有留证 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D1 无留证的行: EVT 001；D3 未按约定命名且未登记豁免: EVT 001(--)；悬空豁免（登记了却找不到对应行）: 005, 007 ｜ A=0 B=1 豁免=0
+  结论：4 OK / 1 FAIL / 0 UNVERIFIED
+  RC=1
+  [PASS] 无留证的行 → FAIL
+
+--- R6 该红的红：豁免表登记了一条事件流里没有的行 → 悬空豁免 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D3 未按约定命名且未登记豁免: EVT 005(r2-card-coverage-220801.txt), EVT 007(judge-hardening-220801.txt)；悬空豁免（登记了却找不到对应行）: 099 ｜ A=0 B=7 豁免=0
+  结论：4 OK / 1 FAIL / 0 UNVERIFIED
+  RC=1
+  [PASS] 悬空豁免 → FAIL（登记表不能变成单方面清单）
+
+--- C1 反向复现：把上面 5 个夹具逐一撤掉，RC 必须回到 0 ---
+  真事件流 + 真豁免表 RC=0
+  [PASS] 回到全绿 —— 红灯确实由夹具造成，不是判据常红
+
+--- C2 夹具隔离自检：判据不得往真记录里写任何东西 ---
+  记录层文件清单 md5 前=ebeb89af23d453bf08329e8e012458b7 后=ebeb89af23d453bf08329e8e012458b7
+  [PASS] 判据只读，未污染真记录
+
+双向测结论: 全通过（0 失败）
+BIDIR_RC=0
+
+----- 五 · 本次第三次踩同一个坑（留证，不粉饰）-----
+症状：G1/C1 期望绿却报红，明细里「豁免=0」—— 真豁免表明明存在。
+原因：把 /c/Users/... 形式的路径塞进环境变量交给原生 node.exe，
+      node 侧 fs.existsSync('/c/Users/...') 解析成 C:\c\Users\... → 不存在。
+本会话同类第 3 次：ISS-003（audit.sh）→ judge-selftest 的 win() → 本次。
+**判据报红时先怀疑判据自己**：本次 5 个红灯全由夹具造成、1 个假红由路径造成，被测对象一次没错。
+
+----- 六 · 可复跑清单 -----
+.check/andyngo-integrity.js                       判据本体（I1–I5）
+.check/record/dispatch-exemptions.md              逐条豁免登记（I5 读取并打印原文）
+%TEMP%/i5-bidirectional-test.sh                   双向测（8 个用例）

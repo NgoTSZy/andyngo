@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+ROOT="${PROJECT_ROOT:-$PWD}"
+DATE=$(date -u +%Y-%m-%d)
+OUT="$ROOT/.check/audit/$DATE"
+mkdir -p "$OUT"
+
+TS=$(date -u +%H%M%S)
+REPORT="$OUT/audit-$TS.txt"
+
+{
+  echo "=== ACCEPTANCE ==="
+  if [[ -f "$ROOT/.check/acceptance.js" ]]; then
+    ( cd "$ROOT" && node .check/acceptance.js 2>&1 )
+    echo "EXIT=$?"
+  else
+    echo "SKIP 无 acceptance.js"
+  fi
+
+  # 【2026-09-15 加，DEC-010】规格 §3.3/§3.4 把「完整性校验（I1–I5）」列为 **AUDIT 的组成部分**，
+  # 而 AUDIT 的载体就是本脚本 —— 但本脚本原先只跑 acceptance，于是 I1–I5 的载体
+  # `.check/andyngo-integrity.js` **没有任何调用者**（只在文档里被提到，全是文字不是调用）。
+  # 一段没人调用的判据 = 一条没有判据的规则，只是换了个地方藏着。
+  echo
+  echo "=== INTEGRITY (I1-I5) ==="
+  if [[ -f "$ROOT/.check/andyngo-integrity.js" ]]; then
+    ( cd "$ROOT" && node .check/andyngo-integrity.js 2>&1 )
+    echo "EXIT=$?"
+  else
+    echo "SKIP 无 andyngo-integrity.js"
+  fi
+
+  # 【2026-09-16 加，ISS-043 / ISS-035 / ISS-026 / CHG-025 / 新发现】
+  # 「跨物对照」判据（X1–X5）：每一项都只问**一件事** —— A 与 B 的关系有没有被写下来。
+  #   X1 退出码 2 的语义有没有登记（exit-codes.md）· X2 三态↔五态有没有对照声明
+  #   X3 evidence 归档件只增不减且非空 · X4 新增 CHG 行第 2 字段是不是合规 ts
+  #   X5 记录 md5 ↔ 磁盘新鲜度（**只报告不判红**）
+  # 接在这里的理由与上面那段（DEC-010）完全相同：**判据必须有一个调用者**，
+  # 否则它只是「换了个地方藏着的规则」。**判据与它的双向测必须一起跑** ——
+  # 一条只会说 OK 的判据，和没有判据长得一样。
+  echo
+  echo "=== CROSSREF (X1-X5) ==="
+  if [[ -f "$ROOT/.check/probe-crossref.js" ]]; then
+    ( cd "$ROOT" && node .check/probe-crossref.js --scan 2>&1 )
+    echo "EXIT=$?"
+    echo
+    echo "--- 双向测（--inject）---"
+    ( cd "$ROOT" && node .check/probe-crossref.js --inject 2>&1 )
+    echo "EXIT=$?"
+  else
+    echo "SKIP 无 probe-crossref.js"
+  fi
+} > "$REPORT" 2>&1
+
+cat "$REPORT"

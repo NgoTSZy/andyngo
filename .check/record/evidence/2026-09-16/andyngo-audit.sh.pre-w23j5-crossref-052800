@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+ROOT="${PROJECT_ROOT:-$PWD}"
+DATE=$(date -u +%Y-%m-%d)
+OUT="$ROOT/.check/audit/$DATE"
+mkdir -p "$OUT"
+
+TS=$(date -u +%H%M%S)
+REPORT="$OUT/audit-$TS.txt"
+
+{
+  echo "=== ACCEPTANCE ==="
+  if [[ -f "$ROOT/.check/acceptance.js" ]]; then
+    ( cd "$ROOT" && node .check/acceptance.js 2>&1 )
+    echo "EXIT=$?"
+  else
+    echo "SKIP 无 acceptance.js"
+  fi
+
+  # 【2026-09-15 加，DEC-010】规格 §3.3/§3.4 把「完整性校验（I1–I5）」列为 **AUDIT 的组成部分**，
+  # 而 AUDIT 的载体就是本脚本 —— 但本脚本原先只跑 acceptance，于是 I1–I5 的载体
+  # `.check/andyngo-integrity.js` **没有任何调用者**（只在文档里被提到，全是文字不是调用）。
+  # 一段没人调用的判据 = 一条没有判据的规则，只是换了个地方藏着。
+  echo
+  echo "=== INTEGRITY (I1-I5) ==="
+  if [[ -f "$ROOT/.check/andyngo-integrity.js" ]]; then
+    ( cd "$ROOT" && node .check/andyngo-integrity.js 2>&1 )
+    echo "EXIT=$?"
+  else
+    echo "SKIP 无 andyngo-integrity.js"
+  fi
+} > "$REPORT" 2>&1
+
+cat "$REPORT"

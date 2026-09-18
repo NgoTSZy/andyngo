@@ -1,0 +1,97 @@
+===== I5 v2 补丁 · 空判据守门人 + 双向测扩到 9 用例 =====
+时间: 2026-09-15T14:21:47Z
+起因: **我自己**在 W8 J1 之后发现一个假绿空洞（不是独立验收发现的）
+
+----- 一 · 空洞是什么 -----
+I5 v2 的 D1/D2/D3 全是「逐行/逐留证」判定。事件流为空（0 行）时：
+  无行 → D1 无违例 · A=∅ → D2 无违例 · 无行 → D3 无违例 → **报 OK**
+即：**空集下「每一行都合规」恒真**。这条判据在「没有东西可判」时报绿，
+   它证明的不是对象合规，是它自己不会说话。
+同一形状也存在于 I1–I4（「0 行全部 8 字段」听起来像通过，其实是空转）。
+
+----- 二 · 修法：全局空判据守门人 -----
+在逐文件块的最前面加：evtLines.length === 0 → I1–I5 **全部 UNVERIFIED**，不报 OK。
+选全局而非只修 I5：I1–I4 是同一形状，只修一条等于把同一个洞留在旁边。
+
+----- 三 · 判据 md5 / 行数 -----
+3aff957e7bea9799be94ebfc87f68dd9 *.check/andyngo-integrity.js
+181 .check/andyngo-integrity.js
+
+----- 四 · 双向测（现 9 用例）-----
+$ bash i5-bidirectional-test.sh <repo> <判据js> <tmp>
+===== I5 v2 双向测 =====
+
+--- G1 该绿的绿：真事件流 + 真豁免表 → I5 OK / RC=0 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w8-j2-i5v2-vacuity-222145.txt, w8-j2-i5v2-vacuity-222147.txt ｜ A=8 B=8 豁免=2
+  结论：4 OK / 1 FAIL / 0 UNVERIFIED
+  RC=1
+  [FAIL] RC=1（期望 0）
+
+--- R1 该红的红：豁免表不存在 → D3 必须报 2 条不合约定 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w8-j2-i5v2-vacuity-222145.txt, w8-j2-i5v2-vacuity-222147.txt；D3 未按约定命名且未登记豁免: EVT 005(r2-card-coverage-220801.txt), EVT 007(judge-hardening-220801.txt) ｜ A=8 B=8 豁免=0
+  结论：4 OK / 1 FAIL / 0 UNVERIFIED
+  RC=1
+  [PASS] 缺豁免表时报 FAIL
+
+--- R2 该红的红：新增一行、留证不合约定 → D3 必须点名 EVT 008 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        留证目录不存在: ../AppData/Local/Temp/i5-test/r2/record/evidence/2026-09-15；D3 未按约定命名且未登记豁免: EVT 008(eventlog-verifytest-135358.txt) ｜ A=0 B=9 豁免=2
+  结论：3 OK / 2 FAIL / 0 UNVERIFIED
+  RC=1
+  [PASS] 新行不合约定 → FAIL
+
+--- R3 该红的红：留证目录里多一个没人引用的合规文件 → D2 孤儿 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 孤儿留证（无行引用）: w9-j9-orphan.txt ｜ A=1 B=8 豁免=2
+  结论：4 OK / 1 FAIL / 0 UNVERIFIED
+  RC=1
+  [PASS] 孤儿留证 → FAIL
+
+--- R4 该红的红：两行引用同一留证 → D2 重复引用 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D2 被重复引用: w1-j1-probe.txt；悬空豁免（登记了却找不到对应行）: 005, 007 ｜ A=1 B=2 豁免=0
+  结论：4 OK / 1 FAIL / 0 UNVERIFIED
+  RC=1
+  [PASS] 重复引用 → FAIL
+
+--- R5 该红的红：某行 evidence_ptr = `--` → D1 记账必须有留证 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D1 无留证的行: EVT 001；D3 未按约定命名且未登记豁免: EVT 001(--)；悬空豁免（登记了却找不到对应行）: 005, 007 ｜ A=0 B=1 豁免=0
+  结论：4 OK / 1 FAIL / 0 UNVERIFIED
+  RC=1
+  [PASS] 无留证的行 → FAIL
+
+--- R6 该红的红：豁免表登记了一条事件流里没有的行 → 悬空豁免 ---
+  [I5] 事件行 ↔ 作业留证 双向单射           FAIL        D3 未按约定命名且未登记豁免: EVT 005(r2-card-coverage-220801.txt), EVT 007(judge-hardening-220801.txt)；悬空豁免（登记了却找不到对应行）: 099 ｜ A=0 B=8 豁免=0
+  结论：4 OK / 1 FAIL / 0 UNVERIFIED
+  RC=1
+  [PASS] 悬空豁免 → FAIL（登记表不能变成单方面清单）
+
+--- R7 该红的红（假绿）：空事件流 → 必须 UNVERIFIED(2)，不许空集 PASS(0) ---
+  ===== andyngo · 事件流完整性校验 =====
+  目标: ../AppData/Local/Temp/i5-test/r7/record/eventlog/2026-09-15.txt
+  [I1] 字段数 = 8                   UNVERIFIED  事件流为空（0 行）—— 判据空转，不报 OK
+  [I2] seq 连续                    UNVERIFIED  事件流为空（0 行）—— 判据空转，不报 OK
+  [I3] evidence_ptr 存在           UNVERIFIED  事件流为空（0 行）—— 判据空转，不报 OK
+  [I4] ts 单调递增                   UNVERIFIED  事件流为空（0 行）—— 判据空转，不报 OK
+  [I5] 事件行 ↔ 作业留证 双向单射           UNVERIFIED  事件流为空（0 行）—— 判据空转，不报 OK
+  ----
+  结论：0 OK / 0 FAIL / 5 UNVERIFIED
+  RC=2
+  RC=2
+  [PASS] 空事件流 → UNVERIFIED，未空转报绿
+
+--- C1 反向复现：把上面 6 个夹具逐一撤掉，RC 必须回到 0 ---
+  真事件流 + 真豁免表 RC=1
+  [FAIL] RC=1（期望 0）
+
+--- C2 夹具隔离自检：判据不得往真记录里写任何东西 ---
+  记录层文件清单 md5 前=0daca6136e9ddb7fe1ba71252643f72a 后=0daca6136e9ddb7fe1ba71252643f72a
+  [PASS] 判据只读，未污染真记录
+
+双向测结论: 有 2 项失败
+BIDIR_RC=1
+
+----- 五 · 新增用例 R7（原文）-----
+R7 空事件流 → 期望 UNVERIFIED(2)。加之前该夹具会报 0（假绿）。
+
+----- 六 · 时序与协调（记下来，因为这是个真风险）-----
+W9 独立验收员在我打这个补丁**之前**就被派出了，它读到的可能是打补丁前的版本。
+→ 已用 SendMessage 通知它版本已变（附 md5），请它验**当前**修订。
+→ 教训：**改判据与验判据并行 = 移动靶。** 派验收之前应冻结被测版本，或把修订号写进派发词。

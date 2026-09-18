@@ -1,0 +1,131 @@
+================================================================================
+w12-j1 · I5 v3.5 复核 + 双向测缺参守门人（ISS-015）+ AUDIT 全链路
+时间：2026-09-16T00:2x Z（本地 08:2x）
+================================================================================
+
+【0】冻结件哈希（本留证对应的版本，事后可比对）
+  md5sum .check/andyngo-integrity.js
+    47a5e7c30ab3099e316cfd857c6c0295  .check/andyngo-integrity.js     (326 行 · v3.5)
+  md5sum .check/tests/i5-bidirectional-test.sh
+    2dd017905c82c2723dca3b9813df7f9d  .check/tests/i5-bidirectional-test.sh (328 行 · 25 assert)
+  md5sum skills/andyngo/scripts/andyngo-audit.sh
+    547677857f12ea47e95a8c1002b80bff  skills/andyngo/scripts/andyngo-audit.sh (35 行)
+  归档件 md5sum .check/record/evidence/2026-09-15/andyngo-audit.sh.as-spec-pre-wiring-1449
+    614befb2deb0e138b14a047f6c30dc9c  (22 行 · 接线前)
+
+--------------------------------------------------------------------------------
+【1】真盘判据复跑（不带参数 → 校验 eventlog/ 下全部 .txt）
+命令：cd /c/Users/<user>/.workbuddy-ai && node .check/andyngo-integrity.js
+原始输出：
+  ===== andyngo · 事件流完整性校验 =====
+  目标: .check/record/eventlog/2026-09-15.txt, .check/record/eventlog/2026-09-16.txt
+  [I1] 字段数 = 8（无非 EVT 行）         OK          12 行全部 8 字段，且无非 EVT 行
+  [I2] seq 连续                    OK          12 条 seq = 001 002 003 004 005 006 007 008 009 010 011 012
+  [I3] evidence_ptr 存在           OK          全部 evidence_ptr 真实存在（`--` 已放行）
+  [I4] ts 可解析且单调递增               OK          12 条 ts 非降
+  [I5] 事件行 ↔ 作业留证 双向单射           OK          双向单射成立 · A=10 B=12 豁免=2
+  [I1] 字段数 = 8（无非 EVT 行）         OK          2 行全部 8 字段，且无非 EVT 行
+  [I2] seq 连续                    OK          2 条 seq = 001 002
+  [I3] evidence_ptr 存在           OK          全部 evidence_ptr 真实存在（`--` 已放行）
+  [I4] ts 可解析且单调递增               OK          2 条 ts 非降
+  [I5] 事件行 ↔ 作业留证 双向单射           OK          双向单射成立 · A=2 B=2 豁免=0
+  ---- 豁免（逐条打印）----
+  EXEMPT  EX-001 EVT 005 2026-09-15T14:19Z 留证文件名 `r2-card-coverage-220801.txt` …
+  EXEMPT  EX-002 EVT 007 2026-09-15T14:19Z 留证文件名 `judge-hardening-220801.txt` …
+  ----
+  结论：10 OK / 0 FAIL / 0 UNVERIFIED
+  RC=0
+
+关键点：**两份日志各自独立编号**。2026-09-16 那份的 I2 报「2 条 seq = 001 002」而不是
+「与 9-15 连成 001…012 共 14 条」—— 说明按日志分组是对的。若跨日志连成一条序列，
+第二份日志（从 001 重新开始）会被判「seq 倒退」→ 必假红。
+
+--------------------------------------------------------------------------------
+【2】双向测：三种调用方式（含新增守门人）
+命令与结果（退出码用 `>/dev/null 2>&1; echo $?` 直接取，**不经管道**）：
+  bash .check/tests/i5-bidirectional-test.sh
+    → 双向测结论: 全通过（0 失败）        EXIT=0
+  bash .check/tests/i5-bidirectional-test.sh "/nonexistent-root"
+    → SKIP 定位不到记录根（记录根=/nonexistent-root）—— 拒绝在错的路径上跑出一片假红灯
+      EXIT=2
+  bash .check/tests/i5-bidirectional-test.sh "/c/Users/<user>/.workbuddy-ai" "/nonexistent.js"
+    → SKIP 判据不存在：/nonexistent.js
+      EXIT=2
+
+正常路径尾部原文：
+  --- C1 反向复现：撤掉全部夹具，真事件流必须回到 rc=0 ---
+    RC=0
+    [PASS] 回到全绿 —— 红灯确由夹具造成，非判据常红
+  --- C2 夹具隔离（**哈希内容**，不是路径清单）---
+    内容哈希 前=027f208244edf8a638cad6d0ae12aa18
+    内容哈希 后=027f208244edf8a638cad6d0ae12aa18
+    [PASS] 判据只读：内容未变（改内容会被抓到，路径清单哈希抓不到）
+  双向测结论: 全通过（0 失败）
+
+R22 原文（v3.3 低危修复的活证据）：
+  [I5] 事件行 ↔ 作业留证 双向单射  FAIL  D4 文件名与行的 wave/job 不一致:
+        EVT 001(W J1 ≠ w0-j1-x.txt) ｜ A=1 B=1 豁免=0
+  RC=1（期望 1）
+
+--------------------------------------------------------------------------------
+【3】「73 项失败」是怎么来的 —— 本留证的重点（ISS-015）
+我第一次复跑时**没带参数**（`bash .check/tests/i5-bidirectional-test.sh`），当时的脚本是
+  HOME_DIR="$1"; JUDGE="$2"; TMP="$3"
+**缺参不报错，继续跑**。原始输出开头：
+  cygpath: can't convert empty path
+  mkdir: cannot create directory ‘’: No such file or directory
+  ===== I5 v3 双向测 =====
+  --- R1 D3：豁免表缺失 → 必须点名 EVT 005 与 EVT 007 ---
+  cp: cannot stat '/.check/record/eventlog/2026-09-15.txt': No such file or directory
+  cp: cannot stat '/.check/record/exemptions/2026-09-15.md': No such file or directory
+  find: ‘/.check/record/evidence/2026-09-15’: No such file or directory
+  sed: can't read /r1/record/eventlog/2026-09-15.txt: No such file or directory
+  rm: /r1/record/exemptions/2026-09-15.md: No such file or directory
+尾部：
+  双向测结论: 有 73 项失败
+
+判定：**这不是判据的缺陷，是测试在拿不到参数时不拒跑** —— 把「根本没跑成」伪装成
+「跑了 73 条红灯」。`$HOME_DIR` 空 → 路径退化成 `/.check/record/...`（根目录下）；
+`$TMP` 空 → 夹具落在 `/r1` `/r3` 之类根目录。所有 cp/find 全失败，日志为空，
+于是每条断言都报「缺 X」。
+
+为什么这条值得单独记账：
+  · 形状与 MEMORY 里那条 hook 教训**同族** ——「一条永远红的断言会训练人忽略红色」。
+    一条会这样撒谎的测试比没有测试更坏。
+  · 我自己就是被它骗的那一个：我第一反应是「判据退化了」，直到看见 `cygpath` 那行
+    才回头查调用方式。**「判据报红时先怀疑判据自己」这条原则，本轮第三次生效。**
+
+修法（两条，已落盘）：
+  ① 三参数可省，按脚本自身位置推导：
+       SELF_DIR=$(cd "$(dirname "$0")" && pwd)
+       HOME_DIR="${1:-$(cd "$SELF_DIR/../.." && pwd)}"
+       JUDGE="${2:-$HOME_DIR/.check/andyngo-integrity.js}"
+       TMP="${3:-$(mktemp -d)}"
+  ② 推导结果不自洽 → **exit 2 拒跑**，绝不进入断言循环：
+       记录根无 `.check/record/eventlog`  → exit 2
+       判据文件不存在                      → exit 2
+       临时目录不可用                      → exit 2
+  **拒跑(2) 与 失败(1) 与 通过(0) 是三种状态，退出码必须分开** ——
+  把「没跑成」和「跑了且不合格」混成一个 1，就是让调用方无法区分「我命令写错了」
+  与「被测对象坏了」。
+
+--------------------------------------------------------------------------------
+【4】AUDIT 全链路（DEC-010 接线后）
+命令：bash skills/andyngo/scripts/andyngo-audit.sh
+尾部原文：
+  === INTEGRITY (I1-I5) ===
+  …（与【1】同，10 OK / 0 FAIL / 0 UNVERIFIED）
+  RC=0
+  EXIT=0
+接线前：本脚本只跑 acceptance，`.check/andyngo-integrity.js` **没有任何调用者**
+（规格 §3.3/§3.4 把它列为「AUDIT 的组成部分」，却只在文档里被提到 —— 全是文字不是调用）。
+接线后 INTEGRITY 段随 AUDIT 一起产出，落进 `.check/audit/<date>/audit-<ts>.txt`。
+
+--------------------------------------------------------------------------------
+【5】本轮未改动 / 未修（诚实边界）
+  · `andyngo-integrity.js` 本轮**零改动**（md5 与 v3.5 冻结值一致）
+  · ISS-013（`check-protocol.js` 的 C5 报全局行号、不标来源文件 = 归因错误）**仍未修** ——
+    改 1412 行的判据会动到验收 [1] 的被测对象
+  · ISS-014（R1/R3 路由覆盖）**仍未修** —— DEC-006 明确保留冻结，等裁决
+  · 验收整体仍是 `4 OK / 3 FAIL / 1 DRIFT / 4 UNVERIFIED`（未结项②）
+================================================================================

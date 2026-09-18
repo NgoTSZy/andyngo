@@ -1,0 +1,72 @@
+W23 J18 · 本机剥离到「只保留 /andyngo」—— 用户裁决乙案 · 实测记录
+================================================================
+
+一、执行（用户选乙：本机也删）
+  移出（mv，非 rm，可逆）→ .backup-strip-20260917-2232/
+    skills/  : andy · hub · constraint-mode            （4 目录 → 1 目录）
+    tests/   : andy-acceptance-6.sh · andy-fmt-consistency.js
+               andy-regression.sh · andy-dream-test.sh （22 → 18 个文件）
+
+二、改前指纹未测（我的流程失误）
+  本轮直接动手，没先取改前 md5/行数 ⇒ CHG-348/349/350/351/352 的 md5前 记 `--`。
+  file-history 里 MODE.md 最新版是 2026-09-15（无今日改前版）；
+  按项目规矩「不靠 --list 反推改前指纹」，不据它填写。
+
+三、让判据告诉我红在哪（不预测）
+  移出后 ruler-callpoint.js  rc=1，8 条红：
+    R1×6  artifacts-index.js · battery-relative-test.sh · evt-field-shape.js
+          hardcoded-count.js · judge-selftest.sh · x1-freshness-test.sh
+    R4×2  andyngo-manifest.js · i5-bidirectional-test.sh  ← 假命中来自 .check/tmp/publish/
+  hardcoded-count.js  rc=2  REFUSE 读不到表里的文件: skills/andy/scripts/andy-audit.sh
+  check-protocol.js   rc=1  ✗ MODE.md:26 引用了不存在的路径 skills/constraint-mode/MODULE.md
+                            ✗ refs/C-memory.md:69 同族（共 5 处）
+
+四、修法（全部实测复核）
+  ruler-callpoint.js  SKIP_REL 加 `.check/tmp`      ← 机制修法（上次 drill 只搬走 = 纪律修法）
+  andyngo-audit.sh    418 → 512 行，追加 8 段调用点（bash -n rc=0）
+  hardcoded-count.js  删表项（改指向会造永远找不到锚点的假判据）
+  acceptance.js       第 [10] 项 hub 标价 整项移除（12 → 11 项）
+  MODE.md / refs×3 / MEMORY.md  清 5 处活引用 + 3 处失效指针
+
+五、验收（收尾实测）
+  node .check/acceptance.js → 11 OK / 0 FAIL / 0 DRIFT / 0 UNVERIFIED · rc=0
+  ruler-callpoint.js rc=0（18 个文件全部有可执行调用点，豁免 2 条）
+  check-protocol.js  rc=0（C1–C8 全 PASS）
+  hardcoded-count.js rc=0 · probe-record-shape rc=0 · newid --check rc=0
+  冻结件未动：andyngo-integrity.js e8d1386e… · check-protocol.js 4f0aa2d0… ·
+              i5-bidirectional-test.sh 5a2eea14…（与登记值一致）
+
+六、已知代价（不假装没有）
+  · 验收少 1 项，且它原本是唯一能发现「路由表标价腐烂」的东西。
+  · tests/ 少 4 条 andy 专属尺子。
+  · 发布副本 .check/tmp/publish/ 的 andyngo-audit.sh 是改前版（缺 8 段）⇒ 发布前需重建。
+
+## 收尾（2026-09-17T14:44Z）—— 修掉本次剥离自己造成的 2 条红 + 处置 1 条既存红
+
+**1. `probe-record-shape.js --scan` rc=1** —— CHG-348 正文里的「4 目录 1 目录」被 `[I10]` 按空格切成
+两个字段 ⇒ 报「CHG 第 7 字段（行数后）不是整数/`--`：`目录`」。**修法**：这两个字段一律记 `--`
+（目录数不是行数；填数字 = 形状对而语义假），目录数写进正文 —— 走 `mk-line-edit.js` +
+`fix-line-edit.js`（断言「行首逐字 · 行数不变 · 纯前缀替换」）。⇒ 复验 **rc=0 · 三份记录全部合规**。
+
+**2. `probe-crossref.js --scan` rc=2 · 悬空 5** —— `exit-codes.md` 登记了 5 个**已随本次剥离移出本机**
+的文件（`andy-audit.sh` · `andy-dream.sh` · `andy-dream-test.sh` · `andy-record.sh` ·
+`andy-fmt-consistency.js`）。X1 自己的处置口径逐字是「**悬空登记，必须删**」。
+**为什么不用 `del-line.js`**：它的断言③ 要求「被删行是另一行的**逐字重复**」（专治 ISS-124 的
+重复行 bug）⇒ 本处 5 行不重复，它**应当拒删**；手工删长行正是 ISS-048 的形状 ⇒ 写一次性脚本
+`.check/tmp/del-dangling.js`（草稿区，不进记录层工具谱）把 5 条断言写死。⇒ 行数 **63 → 58**，
+复验 **rc=0 · 命中 0 · 悬空 0**。
+
+**3. 顺带处置一条既存的红（不是本轮造成的）** —— `lock-coverage.js` 报 **CHG-346 / CHG-347**
+「改了但没人持锁」：那是**上一个作业**（19 个零引用 skill 移出）在**未取写权锁**的情况下改了
+`.check/record/exit-codes.md` / `skills/hub/routes.md`。**这不是误报**，而它会让判据**永远响**
+（「总是响的警报等于没有警报」）。处置：历史行 append-only ⇒ **不改**（改 ts 就是篡改记录）；
+开 **ISS-147** 记事实 + 按先例（CHG-275/276）登记进 `ALLOW`，`why` 写明「**未取锁**」而**不含糊成
+「时序缝隙」**（豁免可以静音，但不许改写事实的形状）。⇒ `lock-coverage.js` **rc=0**
+（可判 342 行 · OUT 4 其中**豁免 4 条全部真的被用到**）· `--inject` **9/9**。
+
+**记录**：CHG-353（`changes.md` 行首）· CHG-354（`exit-codes.md` 删 5 行）· CHG-355
+（`lock-coverage.js` 的 `ALLOW`）· CHG-356（`issues.md` 新增 ISS-147）。
+**仍余**：上载那一步（等 `gh auth login`）—— 仓库 `NgoTSZy/andyngo` 已建、本地已 commit、`origin` 已接。
+
+--- EVT 025 原正文（2026-09-17 · B 于 J19 迁入：I1 要求 EVT 恰好 8 字段，正文不能留在 eventlog 行上）---
+【用户裁决乙案：本机剥离到只保留 /andyngo】移出 andy · hub · constraint-mode + 4 条 andy 专属尺子（mv，可逆）；8 条通用尺子改接 andyngo-audit.sh；acceptance 第 [10] 项整项移除（12→11）；清 C5 悬空 5 处 + MEMORY.md 失效指针 3 处。验收 11 OK / 0 FAIL · rc=0。见 CHG-348…CHG-356（收尾：修 CHG-348 字段左移 + 删 exit-codes.md 5 条悬空登记 + 把 CHG-346/347 无锁红处置为 ISS-147）。 

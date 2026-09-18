@@ -1,0 +1,1223 @@
+# /andyngo — 完整系统重建指令
+
+你是一个 AI 编程助手。请在本项目根目录下，按以下规格创建一套完整系统。
+
+所有文件名以 `andyngo` 开头。
+所有内容用中文。
+创建完成后，跑验证清单并报告结果。
+
+---
+
+# 第一部分 · 核心理念
+
+## 1.1 这是什么
+
+一套**事件驱动的任务编排系统**。
+
+```
+主代理（Main Agent）= 路由器 + 事件日志
+从不执行任何任务，只做三件事：
+  ① 判事件
+  ② 派子代理
+  ③ 追加事件流
+
+所有行为通过子代理执行
+子代理只回一行事件（EVT 格式）
+防止主代理上下文被污染
+```
+
+## 1.2 为什么这样设计
+
+| 问题 | 解法 |
+|---|---|
+| 主对话越来越脏 | 子代理只回一行事件，原始内容全部落盘 |
+| 记忆长度不可用 | 事件流天然紧凑（每行 ≤120 字符） |
+| 产出无记录 | 三层强制：契约层 + 写入层 + 校验层 |
+| 时间次序混乱 | seq / ts 由脚本生成，不由人报 |
+| 加子代理变慢 | 只并行独立任务；每次跳转 ≈ 9.87 秒 |
+| 安全审计缺失 | 独立 SECURITY 事件，部署前必跑 |
+
+## 1.3 金字塔架构
+
+```
+┌─────────────────────────────────────────────────────┐
+│  L0  USER                                            │
+└───────────────────────┬─────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────┐
+│  L1  MAIN AGENT  =  /andyngo                         │
+│      角色：路由 · 分发 · 批准 · 判定                  │
+│      从不执行。只编排和决策。                         │
+└───────────────────────┬─────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────┐
+│  L2  EVENT PROGRAMS（程序，不是 agent，零成本）        │
+│      10 个事件程序，L1 自己走的检查清单               │
+└───────────────────────┬─────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────┐
+│  L3  EXECUTION SUBAGENTS（并行、隔离、不能嵌套）      │
+│      Explore / Plan / general-purpose / verifier     │
+└─────────────────────────────────────────────────────┘
+```
+
+**硬约束**：子代理不能再派子代理。L1 直接派发。
+
+## 1.4 未验证假设（在首次启动时请核）
+
+1. 本环境只注册 `SKILL.md` 文件 —— 未验
+2. 子代理不能嵌套 —— 未验
+3. bash / node / python 可用性 —— 未验
+
+若任一条不成立，按第七部分《适配表》降级。
+
+---
+
+# 第二部分 · 文件结构（必须全部创建）
+
+```
+<项目根>/
+├── skills/
+│   └── andyngo/
+│       ├── SKILL.md                        ← 唯一注册文件
+│       │
+│       ├── references/
+│       │   ├── andyngo-glossary.md
+│       │   ├── andyngo-event-protocol.md
+│       │   ├── andyngo-record.md
+│       │   ├── andyngo-sources.md
+│       │   ├── andyngo-design-pool.md
+│       │   ├── andyngo-agents.md
+│       │   ├── andyngo-report.md
+│       │   │
+│       │   ├── A-discovery/
+│       │   │   ├── andyngo-task.md
+│       │   │   ├── andyngo-resume.md
+│       │   │   └── andyngo-retro.md
+│       │   ├── B-execution/
+│       │   │   ├── andyngo-fix.md
+│       │   │   └── andyngo-deploy.md
+│       │   ├── C-assurance/
+│       │   │   ├── andyngo-verify.md
+│       │   │   ├── andyngo-security.md
+│       │   │   └── andyngo-audit.md
+│       │   └── D-evolution/
+│       │       ├── andyngo-evolve.md
+│       │       └── andyngo-seal.md
+│       │
+│       ├── assets/
+│       │   └── andyngo-contract.md
+│       │
+│       ├── artifacts/                      ← 空目录
+│       │
+│       └── scripts/
+│           ├── andyngo-record.sh
+│           ├── andyngo-audit.sh
+│           └── andyngo-security-scan.sh
+│
+└── .check/
+    ├── audit/
+    │   └── <YYYY-MM-DD>/                   ← 90 天保留
+    └── record/
+        ├── eventlog/<日期>.txt
+        ├── issues.md
+        ├── decisions.md
+        ├── changes.md
+        └── evidence/<日期>/
+```
+
+**共 20 个文件 + 6 个目录。**
+
+---
+
+# 第三部分 · 各文件完整内容
+
+## 3.1 skills/andyngo/SKILL.md
+
+```markdown
+---
+name: andyngo
+description: >
+  统一启动路由。触发词：启动, 开始, 继续, 接上次, 修, 坏了,
+  测一下, 验收, 巡检, 复盘, 收尾, 落, 定稿.
+  路由到 10 个事件程序之一。不执行。
+---
+
+# /andyngo — 路由器
+
+## 主代理三件事
+① 判事件 ② 派子代理 ③ 追加事件流
+从不执行。
+
+## 判事件表（唯一一张，不许散）
+
+| 用户的话 | 事件 | 类 |
+|----------|------|-----|
+| 做/建/写 + 新对象 | TASK | A |
+| 继续/接上次 | RESUME | A |
+| 报告/复盘 | RETRO | A |
+| 修/坏了/报红 | FIX | B |
+| 部署 | DEPLOY | B |
+| 测/验 | VERIFY | C |
+| 安全检查 | SECURITY | C |
+| 查一下/巡检/空启动 | AUDIT | C |
+| 自改良 | EVOLVE | D |
+| 落/定稿/收尾 | SEAL | D |
+| 判不出 | ASK×1，列 10 个 | — |
+
+显式：`/andyngo task` → TASK
+空启动：`/andyngo` → AUDIT
+轻量入口：`/andyngo issue <描述>` → 记 ISS
+
+## 四条硬规矩
+1. 说"已落"前必须跑核对命令。核不出证据写"待落"。
+2. 同一文件不许并行编辑。
+3. 成功返回值不是事实，是意图。
+4. 测不了什么，一开始就说。
+
+## 优先级 P0–P7
+P0 口径 → P1 搜已有 → P2 验接口 → P3 只并行独立 →
+P4 只回结论 → P5 独立验收 → P6 安全在部署前 → P7 最简起步
+
+## 主代理禁令
+1. 不粘贴子代理原始输出
+2. 不解释（只追加 EVT）
+3. 不自己执行（只派）
+4. 不直读 artifacts/（派 Explore，摘要 ≤3 行）
+
+## 事件格式
+EVT <seq> <ts> <wave> <job> <status> <artifact_ptr> <evidence_ptr>
+
+## 记录层
+.check/record/  ← 90 天
+  eventlog/  issues.md  decisions.md  changes.md  evidence/
+
+## 输出形态
+OK / FAIL / ASK / PROGRESS / BLOCK
+PROGRESS 不消耗 ASK 配额（总配额 2）。
+
+## 未验证假设
+见 references/andyngo-event-protocol.md 末节。
+```
+
+## 3.2 references/andyngo-glossary.md
+
+```markdown
+# 四类专家术语
+
+## A · DISCOVERY（Product Discovery / Design Thinking）
+Problem Statement · Jobs-to-be-Done (JTBD) · Success Criteria ·
+Definition of Ready · Definition of Done · Hypothesis ·
+Confidence Level (high/medium/low) · Reference Class ·
+Time-to-Value · Rework Rate
+
+## B · EXECUTION（DevOps / SRE）
+Blast Radius · Idempotency · Canary Release · Rollback Plan ·
+SLO / SLI / SLA · Error Budget · Root Cause Analysis (RCA) ·
+Five Whys · Change Failure Rate · MTTR · Blue-Green Deploy · Feature Flag
+
+## C · ASSURANCE（Security Engineering / QA / Formal Verification）
+Threat Model · Attack Surface · STRIDE ·
+OWASP Top 10 · OWASP Agentic Top 10 (2026) ·
+Least Privilege · Zero Trust · Mutation Testing ·
+Assertion Coverage · False Positive / False Negative ·
+Test Oracle · Provenance · Bidirectional Test
+
+## D · EVOLUTION（Platform Engineering / MLOps）
+Regression Budget · Golden Set · Skill Evolution ·
+Immutable Artifact · Content-Addressable · Manifest ·
+Attestation · Lineage · ADR · Backfill · Tombstone
+
+## 记录层专用
+Event Sourcing · Append-only Log · Audit Trail ·
+Issue Tracker · Event Log · Evidence Pointer
+
+## 输出形态（全局共用）
+| 形态 | 何时 | 格式 |
+|------|------|------|
+| OK | 成功带数字 | OK <做了什么> <数字> |
+| FAIL | 失败带归因 | FAIL <什么坏了> <归因> |
+| ASK | 需用户决定 | ASK <问题> <默认>（配额 2） |
+| PROGRESS | 执行中 | → <波次> <状态> <剩余> |
+| BLOCK | 卡住 | BLOCK <卡在哪> <需要什么> |
+
+PROGRESS 不消耗 ASK 配额。
+```
+
+## 3.3 references/andyngo-event-protocol.md
+
+```markdown
+# 事件格式 + 子代理契约
+
+## 事件行
+EVT <seq> <ts> <wave> <job> <status> <artifact_ptr> <evidence_ptr>
+
+| 字段 | 谁生成 | 规则 |
+|------|--------|------|
+| seq | 脚本 | 从 001 起，不许跳号 |
+| ts | 脚本 | UTC ISO8601 |
+| wave | 主代理 | W1/W2/… |
+| job | 主代理 | J1/J2/… |
+| status | 子代理 | OK/FAIL/BLOCK |
+| artifact_ptr | 子代理 | 产物路径；无则 -- |
+| evidence_ptr | 子代理 | 必须真实存在 |
+
+实例：
+EVT 001 2026-09-15T14:23:01Z W1 J1 OK artifacts/tokens.json .check/record/evidence/2026-09-15/w1-j1.txt
+
+## 子代理契约（随任务派发）
+你的回传必须是这一行，不许加解释：
+EVT <seq> <ts> <wave> <job> <status> <artifact_ptr> <evidence_ptr>
+
+1. 产物写磁盘，路径放 artifact_ptr
+2. 证据写磁盘，路径放 evidence_ptr（必须真实存在）
+3. 不许把产物内容、日志内容、文件全文贴回主对话
+4. status 三态：OK / FAIL / BLOCK
+5. FAIL 时 artifact_ptr 写 `--`
+6. 一行之外，任何输出被丢弃
+7. 读资料摘要 ≤3 行
+
+## 主代理权限
+| 动作 | 允许 | 方式 |
+|------|------|------|
+| 读资料 | 是 | 通过下级代理代为执行，摘要 ≤3 行 |
+| 读大文件 | 否 | 派 Explore 读 |
+| 写文件 | 否 | 子代理写 |
+| 跑命令 | 否 | 子代理跑（例外：audit.sh） |
+| 追加事件 | 是 | 必须通过 record.sh |
+
+## 主代理禁令
+1. 不粘贴子代理原始输出
+2. 不解释子代理做了什么（只追加 EVT 行）
+3. 不自己执行任务（只派子代理）
+4. 不直读 artifacts/ 内容（派 Explore）
+
+## 循环机制
+派 WAVE N → 收事件流 → 全 OK？ → 下一波次
+                            ↓否
+                     派修复子代理 → 重跑
+                     重试 ≥3 → BLOCK 交用户
+
+## 完整性校验（AUDIT 的一部分）
+□ seq 连续？（缺号 → FAIL）
+□ evidence_ptr 指向的文件存在？（缺失 → FAIL）
+□ ts 单调递增？（乱序 → FAIL）
+□ 事件数 == 子代理派发数？（不等 → FAIL）
+
+## 状态显示格式
+STATE  <phase> <n>/<total>
+FILE   <path>
+
+或
+STATE  <phase> <n>/<total> DONE
+NEXT   <下一步>
+
+问题：
+ISSUE  <ID> <状态> <描述>
+
+解决：
+FIXED  <ID> <描述>
+```
+
+## 3.4 references/andyngo-record.md
+
+```markdown
+# 记录层协议
+
+## 三个组件
+① 本协议（写法）
+② scripts/andyngo-record.sh（唯一写入入口）
+③ .check/record/（统一落点）
+
+记录是横切关注点，不是独立 skill。不加 skill。
+
+## 四种记录
+
+### 1 · 事件流  eventlog/<日期>.txt
+EVT <seq> <ts> <wave> <job> <status> <artifact_ptr> <evidence_ptr>
+- seq 与 ts 由脚本生成，不由人报
+- 保留 90 天
+
+### 2 · 问题记录  issues.md
+ISS-<序号> <状态> <首现> <最后更新> <严重度> <描述> <关联事件>
+状态机：open → investigating → resolved → verified
+         ↘ wontfix
+严重度：critical / high / medium / low / info
+
+### 3 · 决策记录  decisions.md
+DEC-<序号> <时间> <决策> <依据> <替代方案> <后果> <关联事件>
+专家术语：ADR
+
+### 4 · 变更记录  changes.md
+CHG-<序号> <时间> <文件> <md5前> <md5后> <行数前> <行数后> <原因> <关联决策>
+
+## 序号规则
+三个序号全部从 001 开始，各自独立。
+
+## 不改历史，只追加
+| 需求 | 做法 |
+|------|------|
+| 修正错误记录 | 不改原记录，追加新记录引用旧 ID |
+| 补录过去事件 | 追加，ts 用真实时间，标记 [backfill] |
+| 删除记录 | 追加墓碑 Tombstone，不删原文 |
+
+## 完整性校验
+□ seq 连续
+□ evidence_ptr 存在
+□ ts 单调递增
+□ 事件数 == 派发数
+
+任何一项失败 → AUDIT 报 FAIL
+
+## 查询血缘
+ISS → EVT → evidence_ptr
+CHG → DEC → EVT
+```
+
+## 3.5 references/andyngo-report.md
+
+```markdown
+# 报告机制
+
+## 五种形态
+| 形态 | 何时 | 格式 |
+|------|------|------|
+| OK | 成功带数字 | OK <做了什么> <数字> |
+| FAIL | 失败带归因 | FAIL <什么坏了> <归因> |
+| ASK | 需用户决定 | ASK <问题> <默认>（配额 2） |
+| PROGRESS | 执行中 | → <波次> <状态> <剩余> |
+| BLOCK | 卡住 | BLOCK <卡在哪> <需要什么> |
+
+PROGRESS 不消耗 ASK 配额。
+
+## 报告频率
+每个 Wave 报一次：
+→ WAVE 1 派发 4 个 Explore ∥ 预估 3 分钟
+→ WAVE 1 完成 4/4 耗时 2分41秒
+
+## 去重
+同一波次不重复报。等全部完成一次报。
+例外：某代理超预估 2 倍未回 → 报一次超时。
+
+## 状态显示（极简）
+STATE  <phase> <n>/<total>
+FILE   <path>
+
+## 减少对话规则
+- 无客套
+- 无语气助词
+- 直接展示状态
+- 除非有问题回归，否则不追问
+- 一行能说清的不写两行
+```
+
+## 3.6 references/andyngo-agents.md
+
+```markdown
+# L3 派工契约
+
+## 硬约束
+子代理不能再派子代理。L1 直接派发。
+
+## 四种代理
+| 类型 | 用途 | 返回 | 禁止返回 |
+|------|------|------|----------|
+| Explore | 纯调研 | 摘要清单 | 原始页面 |
+| Plan | 架构设计 | 计划文档 | 探索笔记 |
+| general-purpose | 实现 | 产物 + 判定 | 中间日志 |
+| verifier | 独立验收 | 三态判定 + 缺陷清单 | 执行者自述 |
+
+## 波次公式
+WAVE 1: 独立步骤 → 一条消息并行
+WAVE 2: 依赖步骤 → 等 WAVE 1 返回
+WAVE 3: 实现（接口已写死）
+WAVE 4: 独立验收 ∥
+
+## 每次跳转成本
+实测：一次 agent 跳转 ≈ 9.87 秒纯延迟。
+
+## 只并行独立任务
+| 情况 | 做法 |
+|------|------|
+| 时长相近（±30%） | 同波次 |
+| 时长差 3 倍以上 | 长的先派 |
+| 短任务依赖长任务 | 串行 |
+| 短任务不依赖 | 并行 |
+
+## 双向测规则（FIX 专用）
+修完后故意改坏 → 必须报红。不报红 = 没齿。
+```
+
+## 3.7 references/andyngo-sources.md
+
+```markdown
+# 五层参考池
+
+## 用法
+TASK 的 G2 每步标注"用到哪一层的哪个源"。
+不许从零发明。搜不到写"未搜到，自制"。
+
+## L1 · 设计系统（品牌规范）
+| 仓库 / 网站 | 收录量 | 说明 |
+|---|---|---|
+| VoltAgent/awesome-design-md | 55–62 品牌 | Apple, Claude, Linear, Vercel, Stripe, Notion, Figma, Nike, Nvidia, Runway |
+| HU-UH/awesome-design-md | 55+ 网站 | Airbnb, Spotify, Uber, BMW, Notion, Linear, Stripe, Figma, Vercel |
+| getdesign.md | 62 品牌 | awesome-design-md 配套网站 |
+| brands-design-md | 68 品牌 | Airbnb, Apple, Figma, Stripe, Vercel, Notion, Claude, Duolingo |
+| Refero Styles | 2000+ DESIGN.md | 品牌设计参考库 |
+| Google Design.md | 60+ 大厂规范 | 一键复刻大厂设计规范 |
+
+用法：复制 DESIGN.md 到项目，直接告诉 AI "按这个设计系统做"。
+
+## L2 · 组件库
+
+### React 生态
+| 组件库 | 特点 | 场景 |
+|---|---|---|
+| Ant Design | 蚂蚁集团，120 色板 | 中后台，生态最完善 |
+| Arco Design | 字节跳动，4000+ 项目 | 中后台 + ToB |
+| Semi Design | 字节跳动，企业级 | 中后台 |
+| shadcn/ui | 无 npm 依赖，76 组件 | 现代 Web，AI 友好 |
+| Mantine 7 | 预样式，开箱即用 | Indie SaaS, Dashboard |
+| Chakra UI v3 | 无障碍优先 | 重视 a11y |
+| MUI | 70+ 核心组件 + MUI X | 通用 |
+| Headless UI | 无样式，完全可控 | 自定义设计 |
+
+### Vue 生态
+| 组件库 | 特点 |
+|---|---|
+| Element Plus | 饿了么，功能全面 |
+| Ant Design Vue | 企业级设计体系 |
+| TDesign | 腾讯，React/Vue/小程序 |
+| Vant | 轻量级移动端 |
+| NutUI | 京东风格移动端 |
+| Varlet | Vue 移动端 |
+
+## L3 · 配色 / 字体 / 图标
+
+### 成熟配色方案
+| 来源 | 类型 | 说明 |
+|---|---|---|
+| Tailwind CSS 默认调色板 | 事实标准 | OKLCH 感知均匀色彩空间，50–950 全阶 |
+| Radix Colors | 程序可用 | Tailwind v4 集成，支持 alpha + P3 |
+| Ant Design 色板 | 事实标准 | 120 色（12 主色 + 衍生），HSB 模型 |
+| tunio-colors | npm 包 | 柔和 Tailwind 替代 |
+| Sagewai Tokens | npm 包 | 设计令牌，支持暗色模式 |
+| Design Token Generator (ColorArchive) | 工具 | 输入品牌色生成完整令牌系统，可导出 CSS/Tailwind/SCSS/JSON |
+
+### 配色工具
+| 网站 | 特色 |
+|---|---|
+| Coolors | 最流行，快速生成 |
+| Adobe Color | 色轮 + 配色法则 |
+| Huemint | 机器学习配色 |
+| Khroma | AI 配色生成器 |
+| Muzli AI Colors | AI 配色 |
+| Happy Hues | 色盘嵌入示例预览 |
+| Realtime Colors | 即时套在模拟网站上 |
+| Colormind | AI 配色 |
+| ColorSpace | 生成配色方案 |
+| Nippon Color | 日本传统色 |
+| Picular | 关键词搜颜色 |
+| Pigment | 色彩探索 |
+| BrandColors | 品牌官方色码 |
+| CSS Gradient | 渐变代码导出 |
+
+### 配色编码体系
+| 体系 | 说明 |
+|---|---|
+| OKLCH | 感知均匀。L（明度）0–1，C（彩度），H（色相） |
+| HSB | Ant Design 使用 |
+| Primitive / Semantic 双层 | Primitive 原始值；Semantic 赋予含义 |
+| 三阶体系 | Global / Alias / Component |
+
+色阶映射：
+50      → 95% 明度 → 微妙背景
+100–200 → 90–85% → 浅色背景、悬停态
+300–400 → 75–65% → 边框、禁用态
+500–600 → 主色、品牌色
+700–800 → 深色文字、强调
+900–950 → 最深背景、暗色模式
+
+### 字体
+| 网站 | 说明 |
+|---|---|
+| Google Fonts | 开源字体目录，1500+ |
+| Typewolf | 字体趋势与搭配 |
+| FontPair | 字体配对工具 |
+
+### 图标
+| 网站 | 说明 |
+|---|---|
+| Font Awesome | 成熟 SVG + 动画 |
+| Iconify | 聚合多库，200,000+ |
+| Tabler Icons | 数量丰富 |
+| Lucide | 极简，React 友好 |
+| IconPark | 字节跳动，可商用 |
+| Remix Icon | 2000+ 可商用 |
+| Iconfont | 阿里图标库 |
+
+## L4 · UI 模式与灵感
+| 网站 | 说明 |
+|---|---|
+| Lazyweb | 25.7 万张真实截图，MCP 协议 |
+| Mobbin | 移动 & Web UI 库 |
+| Site of Sites | 人工精选 589 网站 |
+| Refero | 设计参考 |
+| Landbook | 网页设计灵感 |
+| Siteinspire | 网页设计灵感 |
+| Awwwards | 获奖网站 |
+| Lapa Ninja | 落地页灵感 |
+| Collect UI | UI 组件灵感 |
+| Checklist Design | UI/UX 检查清单 |
+| Dribbble | 设计师作品 |
+| Behance | 完整案例 |
+| Pinterest | Moodboard |
+| Curated Design | 前 Google 设计师精选 |
+| Curations.supply | 设计师导航站 |
+
+## L5 · 声音 / 图片 / 动效
+| 源 | 类型 |
+|---|---|
+| LottieFiles | Lottie 动画 |
+| uiGradients | 渐变库 |
+| Unsplash | 高分辨率摄影 |
+| Pexels | 免费图片 |
+| Freepik | 矢量插画 |
+
+## AI 设计资源
+| 资源 | 说明 |
+|---|---|
+| joaorrios/awesome-ai-design | AI 设计资源合集 |
+| Open Design | 开源 Claude Design 替代，71 品牌设计系统 |
+| Penpot | 开源设计平台，4.9 万 Stars |
+| Astryx by Meta | Meta 开源，150+ 无障碍组件 |
+| yehyakin/ai-frontend-design-bookmarks | 中文前端设计资源库 |
+
+## Design Tokens
+| 资源 | 说明 |
+|---|---|
+| Awesome-Design-Tokens | 令牌资源大全 |
+| W3C Design Token Spec | 标准规范 |
+| Style Dictionary | Amazon 令牌转换工具 |
+| Engramma | 令牌编辑器和转换器 |
+
+## 安全参考池
+| 资源 | 说明 |
+|---|---|
+| OWASP Agentic Top 10 (2026) | Agent 系统威胁清单 |
+| agent-audit | 静态扫描器（51–72 规则） |
+| Microsoft Agent Governance Toolkit | 运行时治理 |
+| STRIDE | 六类威胁分类 |
+
+## 部署参考池（四层治理蓝图，Qovery 2026）
+| 层 | 机制 | 工具 |
+|---|---|---|
+| 作用域身份 | 独立 ServiceAccount | K8s / OIDC |
+| 准入时策略 | 不合规拒绝 | Kyverno / OPA Gatekeeper |
+| 人工审批门 | 不可逆需批准 | Argo CD PR |
+| 不可变审计 | append-only | S3 Object Lock + Falco |
+
+## 存疑区
+标注 `未确认` 的条目不许当依据。
+```
+
+## 3.8 references/andyngo-design-pool.md
+
+```markdown
+# 设计资源池
+
+## 用法
+不是收藏夹，是检索入口。
+TASK 的 G2 必须写明"第 X 步用 design-pool 的 Y 层"。
+
+## A · 配色 → 引用 sources.md L3 配色部分
+## B · 字体 → 引用 sources.md L3 字体部分
+## C · 图标 → 引用 sources.md L3 图标部分
+## D · 组件 → 引用 sources.md L2
+## E · 设计系统 → 引用 sources.md L1
+## F · 声音 / 图片 / 动效 → 引用 sources.md L5
+
+## 规则
+- 优先已被大规模采用的（设计系统、事实标准调色板）
+- 不选新出的个人作品
+- 只参考代码 = 交付能跑但难看的东西
+```
+
+## 3.9 references/A-discovery/andyngo-task.md
+
+```markdown
+# andyngo-task — 新任务全流程
+
+domain: DISCOVERY
+expertise: Product Discovery / Design Thinking
+required: Problem Statement, JTBD, Success Criteria, DoR, DoD
+inputs: 用户意图
+outputs: artifacts/ + 验收报告
+stop_when: 验收代理出三态判定
+
+## G1 · Problem Statement
+- 难点在哪（不写"要做什么"）
+- Jobs-to-be-Done
+- 最终目的（推敲，不是猜）
+- Confidence Level
+
+## G2 · 草案计划（≤5 步）
+- 每步标注用到哪个现成件（sources.md / design-pool.md）
+- 含 Definition of Ready
+- 含"测不了什么"（前置声明）
+- 依赖图：哪些并行，哪些串行
+
+## G3 · ASK-1（第 1 次，配额 2）
+三方案：
+  A. <方案> — 依据 <外部源> — 代价 <...>
+  B. ...
+  C. ...
+搜不到写"未搜到，自制"。
+用户选 → 得到 Definition of Done
+
+## G4 · 任务分解
+- 写死 assets/andyngo-contract.md（接口 + 埋点 + 禁止清单 + 类型）
+- 契约先于实现
+
+## G5 · 波次执行
+WAVE 1: Explore① ∥ Explore② ∥ Explore③ ∥ Explore④
+WAVE 2: Plan（写契约）
+WAVE 3: S1 ∥ S2 ∥ S3
+WAVE 4: verifier① ∥ verifier② ∥ verifier③
+
+## G6 · 验收
+派独立 verifier。八条铁律。
+三态判定：PASS / FAIL / UNVERIFIED
+
+## G7 · 收尾（四行）
+做了什么 / 我替你定了什么 / 仍未结 / 下一步
+```
+
+## 3.10 references/A-discovery/andyngo-resume.md
+
+```markdown
+# andyngo-resume — 接续未结项
+
+domain: DISCOVERY
+required: Reference Class, Lineage
+inputs: 上轮 SEAL 的"仍未结"
+outputs: 未结项列表
+stop_when: 用户挑一项进 TASK
+
+## 流程
+1. 读 .check/record/eventlog/<最近日期>.txt
+2. 读最近 SEAL 记录的"仍未结"
+3. 只列未结项给用户
+4. 用户挑一项 → 进 TASK
+
+## 输出
+UNRESOLVED  <n> 项
+  1. <描述>  <来源事件 ID>
+  2. ...
+```
+
+## 3.11 references/A-discovery/andyngo-retro.md
+
+```markdown
+# andyngo-retro — 复盘报告
+
+domain: DISCOVERY
+required: Time-to-Value, Rework Rate, Change Failure Rate, MTTR
+inputs: 本轮全部事件流
+outputs: RETRO 报告
+stop_when: 报告落盘
+
+## 量什么
+- 总耗时
+- 各阶段耗时占比
+- 子代理次数
+- 返工率（Rework Rate）
+- 验证投入 : 产品投入
+- 修复占开发的百分比
+
+## 出什么
+- 环节内哪一处最重
+- 缩减建议
+- 下一轮的输入
+
+## 结论要求
+流程环节没有一个是空转的 —— 问题不在环节多，在环节内产出过重。
+修法不是砍验收，是让验证强度跟着任务生命周期走。
+```
+
+## 3.12 references/B-execution/andyngo-fix.md
+
+```markdown
+# andyngo-fix — 修复
+
+domain: EXECUTION
+expertise: DevOps / SRE
+required: RCA, Five Whys, Blast Radius, Rollback Plan
+inputs: 坏的东西
+outputs: 修复 + 双向测结果
+stop_when: 双向都实测
+
+## 流程
+1. 复现：把坏的那处指出来，跑一次看它红
+2. RCA（Five Whys 定位根因）
+3. 修
+4. 双向测：
+   - 该绿的绿 —— 修完功能正常
+   - 该红的红 —— 把修好的地方再改坏，看报不报
+   - 只测一个方向 = 没测
+5. 检查是否造出假红
+   假红比漏报贵（会训练人忽略红色）
+6. 评估 Blast Radius
+
+## 停
+双向都实测通过。
+```
+
+## 3.13 references/B-execution/andyngo-deploy.md
+
+```markdown
+# andyngo-deploy — 部署建议
+
+domain: EXECUTION
+required: Idempotency, Canary, Rollback Plan, SLO/SLI, Error Budget, Blue-Green, Feature Flag
+inputs: 产物 + 环境
+outputs: 部署方案 + 回滚手册
+stop_when: 方案落盘
+
+## 流程
+1. 环境检查（OS / shell / 运行时 / 依赖）
+2. 四层治理蓝图对照：
+   - 作用域身份
+   - 准入时策略
+   - 人工审批门
+   - 不可变审计
+3. 选最简架构（单实例起步）
+4. 写部署方案 + Rollback Plan
+5. 写复原检查清单
+
+## 反直觉
+系统提示词写"永远不碰生产"不是控制，是建议。
+护栏必须放准入层。
+
+从最简模式开始，只在有证据时加复杂度。
+```
+
+## 3.14 references/C-assurance/andyngo-verify.md
+
+```markdown
+# andyngo-verify — 独立验收
+
+domain: ASSURANCE
+expertise: QA / Formal Verification
+required: Test Oracle, Mutation Testing, Assertion Coverage,
+          False Positive/Negative, Provenance, Bidirectional Test
+inputs: 待验产物
+outputs: PASS / FAIL / UNVERIFIED + 缺陷清单
+stop_when: 三态判定产出
+
+## 八条铁律
+1. 验收标准在派活时写死
+2. 每条断言指向直接证据
+3. 必须有一条"证明被测路径真走到了"
+4. 必须做变异测试（改坏一处看报不报）
+5. "走通了" ≠ "有产出"
+6. 断言钉"东西到位了"，不钉"按什么顺序摆"
+7. 判代码先剥注释；缺陷不许删掉就算修了
+8. 豁免要有覆盖者，且要打印出来
+
+## 铁律九
+增量验 + 最终轮全量回归
+
+## 铁律十
+失败消息带归因字段（五值枚举）
+
+## 铁律十一
+断言分级：must / prefer / fixture
+
+## 独立 = 独立执行，不许采信自述
+不是独立智能体。同一模型可能有共同盲区，这是结构性的。
+```
+
+## 3.15 references/C-assurance/andyngo-security.md
+
+```markdown
+# andyngo-security — 安全审计
+
+domain: ASSURANCE
+expertise: Security Engineering
+required: Threat Model, Attack Surface, STRIDE,
+          OWASP Agentic Top 10, Least Privilege, Zero Trust
+inputs: artifacts/ + .check/record/
+outputs: artifacts/security-report.md
+stop_when: Risk register 产出（按严重度排序）
+
+## 流程
+1. OWASP Agentic Top 10 (2026) 逐项对照
+2. 输入消毒（prompt injection 在所有入口）
+3. 工具权限（最小权限、作用域受限）
+4. 凭据（短期、可轮换、不硬编码）
+5. 审计日志（不可变、append-only、覆盖 perceive-reason-act）
+6. 输出：风险清单（severity-ranked）+ 缓解建议
+
+## Checklist
+□ 所有 agent 输入已消毒和验证
+□ 工具以最小必需权限运行
+□ 凭据是短期的且作用域受限
+□ 第三方插件已验证并沙箱化
+□ 代码执行在隔离环境中进行
+□ Agent 间通信已认证和加密
+
+## 原则
+安全应用在一个点上会让其他点暴露。
+必须治理整条路径：提示词 → 工具执行 → 结果。
+```
+
+## 3.16 references/C-assurance/andyngo-audit.md
+
+```markdown
+# andyngo-audit — 巡检
+
+domain: ASSURANCE
+inputs: 无
+outputs: 四态表
+stop_when: 表产出
+
+## 一条命令
+scripts/andyngo-audit.sh
+
+## 四态
+OK / FAIL / DRIFT / UNVERIFIED
+
+## 输出目录
+.check/audit/<YYYY-MM-DD>/
+保留 90 天。
+
+## 只报，不修
+
+## 七条核对
+1. node .check/acceptance.js（若存在）
+2. node .check/check-protocol.js（若存在）
+3. token 口径（先跑，口径没定义后面全白做）
+4. 目录数
+5. 计数一致性
+6. 常驻层 hook 声明
+7. 覆盖率
+
+## 空启动默认走这里
+```
+
+## 3.17 references/D-evolution/andyngo-evolve.md
+
+```markdown
+# andyngo-evolve — 自改良回归
+
+domain: EVOLUTION
+expertise: Platform Engineering / MLOps
+required: Regression Budget, Golden Set, Skill Evolution
+inputs: 历史缺陷 + baseline
+outputs: 改良提案 + 回归数据
+stop_when: 用户决定是否采纳
+
+## 模式来源
+- Self-Harness（上海 AI Lab）：33%/52%/60% 相对提升
+- GRASP：有界编辑 + 硬回归预算
+
+## 流程
+1. 读历史缺陷（refs/ + VERIFY.md）
+2. 读当前基线
+3. 提 N 条候选（改什么/为什么/预期收益）
+4. 在留出样本（Golden Set）上跑回归
+5. 只保留：净改进 + 不破回归预算
+6. 输出提案 + 回归数据
+
+## 约束
+自修改限定在小控制适配器 + 版本化 harness。
+围绕冻结基础模型。
+每个修改通过随时有效的门控。
+针对固定误差预算发可审计证书。
+```
+
+## 3.18 references/D-evolution/andyngo-seal.md
+
+```markdown
+# andyngo-seal — 封存
+
+domain: EVOLUTION
+required: Immutable Artifact, Manifest, Attestation, Lineage, Tombstone
+inputs: 全部声明
+outputs: 逐条核对输出
+stop_when: 每条声明有证据
+
+## 铁律
+说"已落"之前必须跑核对命令。
+核不出证据就写"待落"。
+改动的状态只能从文件里读出来，不能从记忆里写出来。
+
+## 流程
+1. 逐条列声明
+2. 逐条跑核对命令
+3. 命令与输出一并落盘
+4. 写 Manifest（md5 + 行数）
+5. 写"仍未结"
+6. 写 Attestation（带证据）
+
+## 不许出现
+"已落"却没有核对输出的行。
+区域级豁免 = 裸的允许清单。
+豁免必须逐条、必须写原因、必须打印出来。
+
+## 输出落点
+.check/record/changes.md
+.check/audit/<日期>/seal-<ts>.txt
+```
+
+## 3.19 assets/andyngo-contract.md
+
+```markdown
+# 接口契约模板
+
+task: <任务名>
+wave: W3
+created: <ts>
+
+interface:
+  name: <接口名>
+  methods:
+    - name: <方法>
+      input:
+        <字段>: <类型>   # 写类型不只写存在
+      output:
+        <字段>: <类型>
+  events:
+    format: <埋点格式>
+    domain: <取值域>
+
+baseline:
+  <参数>: <默认值>
+
+forbidden:
+  - <禁止清单>
+
+acceptance:
+  must:    [<必过断言>]
+  prefer:  [<加分断言>]
+  fixture: [<夹具断言>]
+
+verification:
+  standard: <引用 verifier 铁律第几条>
+  mutation:
+    - <变异点>
+
+## 铁律
+- 类型必须写明（不写"存在"）
+- 埋点要有取值域
+- 禁止清单要枚举
+- 验收标准派活时写死
+```
+
+## 3.20 scripts/andyngo-record.sh
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+RECORD_ROOT="${RECORD_ROOT:-$PWD/.check/record}"
+DATE=$(date -u +%Y-%m-%d)
+TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+LOG="$RECORD_ROOT/eventlog/$DATE.txt"
+
+mkdir -p "$(dirname "$LOG")"
+
+LAST=$(grep -oP '^EVT \K\d+' "$LOG" 2>/dev/null | tail -1 || echo 0)
+SEQ=$(printf "%03d" $((10#$LAST + 1)))
+
+EV="${7:-}"
+if [[ -n "$EV" && "$EV" != "--" && ! -f "$EV" ]]; then
+  echo "FAIL evidence_ptr 不存在: $EV" >&2
+  exit 1
+fi
+
+printf "EVT %s %s %s %s %s %s %s\n" \
+  "$SEQ" "$TS" "$1" "$2" "$3" "$4" "$5" "${6:---}" >> "$LOG"
+
+echo "EVT $SEQ $TS $1 $2 $3 $4 $5 ${6:---}"
+```
+
+## 3.21 scripts/andyngo-audit.sh
+
+```bash
+#!/usr/bin/env bash
+set -uo pipefail
+
+ROOT="${PROJECT_ROOT:-$PWD}"
+DATE=$(date -u +%Y-%m-%d)
+OUT="$ROOT/.check/audit/$DATE"
+mkdir -p "$OUT"
+
+TS=$(date -u +%H%M%S)
+REPORT="$OUT/audit-$TS.txt"
+
+{
+  echo "=== ACCEPTANCE ==="
+  if [[ -f "$ROOT/.check/acceptance.js" ]]; then
+    node "$ROOT/.check/acceptance.js" 2>&1
+    echo "EXIT=$?"
+  else
+    echo "SKIP 无 acceptance.js"
+  fi
+} > "$REPORT" 2>&1
+
+cat "$REPORT"
+```
+
+## 3.22 scripts/andyngo-security-scan.sh
+
+```bash
+#!/usr/bin/env bash
+set -uo pipefail
+
+ROOT="${PROJECT_ROOT:-$PWD}"
+DATE=$(date -u +%Y-%m-%d)
+OUT="$ROOT/.check/audit/$DATE"
+mkdir -p "$OUT"
+
+REPORT="$OUT/security-$(date -u +%H%M%S).txt"
+
+{
+  echo "=== OWASP Agentic Top 10 Checklist ==="
+  echo "□ 输入消毒（prompt injection 所有入口）"
+  echo "□ 工具权限（最小权限）"
+  echo "□ 凭据（短期、可轮换）"
+  echo "□ 代码执行隔离"
+  echo "□ Agent 间通信认证"
+  echo "□ 审计日志（不可变）"
+  echo "□ 策略执行（准入层）"
+  echo "□ 零信任身份"
+  echo "□ 端到端审计"
+} > "$REPORT"
+
+echo "SECURITY REPORT $REPORT"
+```
+
+---
+
+# 第四部分 · 完成后验证
+
+创建全部文件后，逐条跑：
+
+```
+□ 1. 目录树完整
+     ls -R skills/andyngo/ | grep -c '\.md\|\.sh'  → 应为 20
+
+□ 2. SKILL.md 被识别
+     问环境："有哪些 skill？" → andyngo 应出现
+
+□ 3. 事件格式正确
+     bash skills/andyngo/scripts/andyngo-record.sh W1 J1 OK -- --
+     检查 .check/record/eventlog/<今天>.txt 是否新增一行
+
+□ 4. seq 连续
+     grep -c '^EVT' .check/record/eventlog/<今天>.txt
+
+□ 5. evidence 校验生效
+     bash skills/andyngo/scripts/andyngo-record.sh W1 J1 OK -- /nonexist
+     应报 FAIL + 退出码 1
+
+□ 6. 记录层目录已建
+     ls .check/record/ → eventlog/ issues.md decisions.md changes.md evidence/
+
+□ 7. 空启动路由正确
+     输入 "/andyngo" → 应路由到 AUDIT
+
+□ 8. 判事件正确
+     输入 "启动 修一下登录" → 应路由到 FIX
+
+□ 9. 事件行不被污染
+     派一个子代理，看主对话是否只有一行 EVT
+
+□ 10. 报告格式
+      主代理应输出 STATE / FILE / NEXT 格式
+```
+
+---
+
+# 第五部分 · 降级方案
+
+如果目标环境缺少某些能力，按下表降级：
+
+| 缺什么 | 怎么办 |
+|---|---|
+| bash | 用 node 版脚本（见附） |
+| node | 用 Python 版 |
+| 子代理机制 | 波次改顺序执行，但保留事件格式 |
+| skill 自动注册 | 做成系统提示词片段，手动粘贴 |
+| 只认 SKILL.md | 命名规则固定（本规格已符合） |
+| 认所有 .md | 命名可放宽，但保持 andyngo 前缀 |
+
+## node 版 record 脚本
+
+```js
+const fs = require('fs');
+const path = require('path');
+const ROOT = process.env.RECORD_ROOT || path.join(process.cwd(), '.check/record');
+const DATE = new Date().toISOString().slice(0,10);
+const TS = new Date().toISOString().replace(/\.\d+Z$/,'Z');
+const LOG = path.join(ROOT, 'eventlog', DATE + '.txt');
+
+fs.mkdirSync(path.dirname(LOG), {recursive:true});
+const prev = fs.existsSync(LOG) ? fs.readFileSync(LOG,'utf8') : '';
+const last = (prev.match(/^EVT (\d+)/gm)||[]).pop();
+const seq = String((last ? parseInt(last.slice(4)) : 0) + 1).padStart(3,'0');
+
+const [wave, job, status, art, ev] = process.argv.slice(2);
+if (ev && ev !== '--' && !fs.existsSync(ev)) {
+  console.error('FAIL evidence_ptr 不存在:', ev);
+  process.exit(1);
+}
+const line = `EVT ${seq} ${TS} ${wave} ${job} ${status} ${art||'--'} ${ev||'--'}\n`;
+fs.appendFileSync(LOG, line);
+console.log(line.trim());
+```
+
+---
+
+# 第六部分 · 一页速查卡
+
+```
+启动          /andyngo start <任务>
+空启动        /andyngo          → AUDIT
+修            /andyngo fix
+验收          /andyngo verify
+安全          /andyngo security
+部署          /andyngo deploy
+复盘          /andyngo retro
+收尾          /andyngo seal
+记问题        /andyngo issue <描述>
+
+事件格式      EVT <seq> <ts> <wave> <job> <status> <art> <ev>
+三态          OK / FAIL / BLOCK
+输出形态      OK / FAIL / ASK / PROGRESS / BLOCK
+主代理禁令    不粘贴 / 不解释 / 不执行 / 不直读
+事件跳转成本  9.87 秒
+ASK 配额      2 次
+记录保留      90 天
+序号起始      001
+```
+
+---
+
+# 执行指令
+
+请现在执行以下步骤：
+
+1. 创建第二部分列出的全部 20 个文件和 6 个目录
+2. 按第三部分逐个文件写入内容
+3. 逐条跑第四部分验证清单
+4. 报告：
+   - 创建的文件列表
+   - 验证清单每项的结果（PASS/FAIL）
+   - 若任一项 FAIL，报错原文
+   - 未验证假设的三条：本环境是否只认 SKILL.md / 子代理能否嵌套 / 脚本可用性
+
+**开始执行。**

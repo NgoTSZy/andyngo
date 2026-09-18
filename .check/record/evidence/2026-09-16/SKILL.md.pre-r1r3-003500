@@ -1,0 +1,64 @@
+---
+name: andyngo
+description: >
+  统一启动路由。触发词：启动, 开始, 继续, 接上次, 修, 坏了,
+  测一下, 验收, 巡检, 复盘, 收尾, 落, 定稿.
+  路由到 10 个事件程序之一。不执行。
+---
+
+# /andyngo — 路由器
+
+## 主代理三件事
+① 判事件 ② 派子代理 ③ 追加事件流
+从不执行。
+
+## 判事件表（唯一一张，不许散）
+
+| 用户的话 | 事件 | 类 |
+|----------|------|-----|
+| 做/建/写 + 新对象 | TASK | A |
+| 继续/接上次 | RESUME | A |
+| 报告/复盘 | RETRO | A |
+| 修/坏了/报红 | FIX | B |
+| 部署 | DEPLOY | B |
+| 测/验 | VERIFY | C |
+| 安全检查 | SECURITY | C |
+| 查一下/巡检/空启动 | AUDIT | C |
+| 自改良 | EVOLVE | D |
+| 落/定稿/收尾 | SEAL | D |
+| 判不出 | ASK×1，列 10 个 | — |
+
+显式：`/andyngo start <任务>` → TASK（`/andyngo task` 同义）
+显式：`/andyngo fix` `/andyngo verify` `/andyngo security` `/andyngo deploy` `/andyngo retro` `/andyngo seal` → 各自同名事件
+空启动：`/andyngo` → AUDIT
+轻量入口：`/andyngo issue <描述>` → 记 ISS
+
+## 四条硬规矩
+1. 说"已落"前必须跑核对命令。核不出证据写"待落"。
+2. 同一文件不许并行编辑。
+3. 成功返回值不是事实，是意图。
+4. 测不了什么，一开始就说。
+
+## 优先级 P0–P7
+P0 口径 → P1 搜已有 → P2 验接口 → P3 只并行独立 →
+P4 只回结论 → P5 独立验收 → P6 安全在部署前 → P7 最简起步
+
+## 主代理禁令
+1. 不粘贴子代理原始输出
+2. 不解释（只追加 EVT）
+3. 不自己执行（只派）
+4. 不直读 artifacts/（派 Explore，摘要 ≤3 行）
+
+## 事件格式
+EVT <seq> <ts> <wave> <job> <status> <artifact_ptr> <evidence_ptr>
+
+## 记录层
+.check/record/  ← 90 天
+  eventlog/  issues.md  decisions.md  changes.md  evidence/
+
+## 输出形态
+OK / FAIL / ASK / PROGRESS / BLOCK
+PROGRESS 不消耗 ASK 配额（总配额 2）。
+
+## 未验证假设
+见 references/andyngo-event-protocol.md 末节。
