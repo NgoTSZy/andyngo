@@ -613,6 +613,22 @@ find_spec() {
   else
     skip "无 .check/tests/report-freshness.js"
   fi
+
+  # 【2026-09-18 加，W23 J29 · ISS-155】把「**账本提到的作业，事件流里有没有它**」从人肉对账变成判据。
+  # 由来：`eventlog/2026-09-18.txt` 只有 1 条 EVT，而 `changes.md` 里 J19–J28 都落了 CHG ⇒
+  #   **账本有、事件流没有**，断档 **9 个作业**（ISS-155）。
+  # ★ 它填的是 I5 的**盲区**：I5 管「事件行 ↔ **留证文件**」，而**一个留证文件可以承载多个作业**
+  #   （实测 `w23-j19-hub-skip-and-record-fix.txt` 承载了 J19–J28 **十个**）
+  #   ⇒ 1:1 单射**形式上是满足的**、断档**静默通过**。
+  #   本段把「作业」的载体换成 **CHG 正文里的作业号**（`changes.md` 434 行里 264 行含 `W<n> J<m>`）。
+  echo
+  echo "=== EVT-COVERAGE ==="
+  if [[ -f "$ROOT/.check/tests/evt-coverage.js" ]]; then
+    ( cd "$ROOT" && node .check/tests/evt-coverage.js 2>&1 )
+    seg
+  else
+    skip "无 .check/tests/evt-coverage.js"
+  fi
 } > "$REPORT" 2>&1
 
 # 【2026-09-16 加，W23 J14 · ISS-096】汇总 + 退出码。
