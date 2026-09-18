@@ -557,6 +557,27 @@ find_spec() {
   else
     skip "无 .check/tests/publish-privacy.js"
   fi
+
+  # 【2026-09-18 加，W23 J25 · 把审计发现的 R1/R11 从「报告里的一段话」变成「判据能看见的东西」】
+  #   由来：J23 审计发现 R1（`sandbox.deleteProtection: false` = 删除无保护）与
+  #   R11（`extraAllowWrite` 含 2 条 macOS 死项），但它们**只活在一份会过期的报告里** ——
+  #   报告 §六 自己写明「**没有判据会问它是否过期**」。
+  #   用户长期指令：「**丙类 · 根本不该由人判：应该由判据判的 → 去加判据，不是去问人**」。
+  # ★ 判据 = `.check/tests/host-config-risk.js`；扫描面 = 工作区根的 `settings.json`（**只读，无副作用**）。
+  # ★ **它现在会红 3 条**（H1 ×1 + H3 ×2）—— 那是**真风险，不是误报**，处置见审计报告 §四
+  #   （R2/R11 = 改配置一行；R1 = 打开删除保护）。**修了就绿。**
+  #   若某条经裁决「可接受」⇒ 登记进判据的 `EXEMPT`（**必须写 why**）⇒ 该条不再报红；
+  #   且**反查**会抓「**僵尸豁免**」（ISS-074：没有反查，白名单就是「把判据弄瞎」的入口）。
+  # ★ **不在本判据面内**（如实写明，不假装已覆盖）：R2（「哪些目录该可写」= **价值判断**）·
+  #   R5（要跑外部命令）· R7（无机械判据）。
+  echo
+  echo "=== HOST-CONFIG-RISK ==="
+  if [[ -f "$ROOT/.check/tests/host-config-risk.js" ]]; then
+    ( cd "$ROOT" && node .check/tests/host-config-risk.js 2>&1 )
+    seg
+  else
+    skip "无 .check/tests/host-config-risk.js"
+  fi
 } > "$REPORT" 2>&1
 
 # 【2026-09-16 加，W23 J14 · ISS-096】汇总 + 退出码。
