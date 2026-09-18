@@ -338,3 +338,60 @@ CHG-363 · ISS-152。**不新开 EVT** —— 「同一作业的收尾修复追�
 
 
 
+
+---
+
+## 十七、J24 —— 恢复规格文件（载体 rc 2 → 0）+ 两处判据自守（2026-09-18）
+
+**A. 本轮做了什么（三件，全部在 `.check/` 内、零副作用、不动发布件源码）**
+
+1. **恢复规格文件**：`.check/record/evidence/2026-09-16/` 里有两份留证副本（`pre-…-151619` 1222 行 · `post-…-152226` **1224 行**）⇒ 取较新的 `post` 复制到 `.check/spec/andyngo build.md.txt`（`find_spec()` 的**第 2 候选**）。
+2. **修「守腐烂值的判据自己腐烂」**：`hardcoded-count.js` 注释里写死的表长（删表项后当场腐烂）⇒ 按 ISS-140 纪律**删掉那个值** + 把**本文件自己**收进 `TABLE` 第 2 条（自守）。
+3. **补 `publish-privacy.js` 边界⑤**：写明 `.backup-*`（7 目录 / 75 处本机路径）与 `projects/`（3.6 GB）**刻意不判**及理由 + 触发条件（兑现审计报告 R9/R3）。
+
+**B. 实测读数（全部现跑）**
+
+| 项 | 改前 | 改后 |
+|---|---|---|
+| 载体 rc | **2**（3 处 SKIP） | **0** |
+| 载体段 | 22 段名 · 20 `EXIT=0` · 非零 0 · SKIP 3 | **23 段名 · 全部 `EXIT=0` · 0 SKIP · 0 FAILED · 1 ABSENT**（hub 正常缺席） |
+| `SPEC-COVERAGE` | SKIP | **跑 · 缺口数 = 0** |
+| `SPEC-REF-COVERAGE` | SKIP | **跑 · OK 22 个文件全部有引用点（活文件面 84）** |
+| `JUDGE-SELFTEST` | SKIP | **跑 · 全通过** |
+| `hardcoded-count.js` | 125 行 · `4fc48571…` | **148 行 · `d1c77341…`** · 正常 rc=0 · `--inject` **5/5** |
+| `publish-privacy.js` | 181 行 · `866267f4…` | **193 行 · `3f25dcc7…`** · 正常 rc=0（284 文件 · 命中 0）· `--inject` **14/14** |
+| `ACCEPTANCE` 段 | — | **11 OK / 0 FAIL / 0 DRIFT / 0 UNVERIFIED** |
+
+★ 载体报告：`.check/audit/2026-09-18/audit-012852.txt`（5m20s）。
+
+**C. 先量误伤再上线（放进规格之前，逐条跑四个依赖规格的判据）**
+
+`spec-ref-coverage.js` rc=0 · `card-entry-coverage.sh` rc=0（缺口 0）· `card-entry-coverage2.js` rc=0（缺口 0）· `judge-selftest.sh` rc=0（全通过）⇒ **零误伤**。
+★ 顺带证明：**留证副本与当前 `SKILL.md` 一致**（若规格腐烂，`card-entry-coverage` 会报缺口）⇒ 用 2026-09-16 的副本**不会造成假绿**。
+
+**D. 更正审计报告 R8 的定性（本项目第 4 次踩同一个形状）**
+
+报告原写「规格文件（构建指令）**本机全无**」—— **不准确**：当时只搜了 4 个候选路径（`ANDYNGO_SPEC` 未设 / `.check/spec/` 空 / 工作区根 / `Desktop/`），**没搜 `.check/record/evidence/`**，而那里有两份副本。
+★ **「原件不在候选路径」≠「文件不存在」**。已更正 R8（划掉 + 标 closed + 加「更正」段 + 「这不是原件」边界）与 §四 建议表第 6 行。
+
+**E. 本轮踩到的三个坑（都实测、都写进了代码注释或本文件）**
+
+1. **JS 块注释里的 glob 路径**：`publish-privacy.js` 注释里写 `.backup-*` 后面**紧跟斜杠** ⇒ 「星号+斜杠」连写**提前终止注释**，把后文变成代码 ⇒ `SyntaxError`。
+2. **元级自指（同一个坑的第二次）**：我在「说明这个陷阱」的文字里**又写了那两个字符** ⇒ 再报一次 `SyntaxError`。**连描述它的文字里都不能含它。**
+   ★ 两次都是 `node --check` 抓出来的 ⇒ **改完 `.js` 先跑 `node --check`**。
+3. **记录行字段含空格**：`CHG-383` 的「文件」字段写成 `.check/spec/andyngo build.md.txt`（**含空格**）⇒ `probe-record-shape.js` 报 `CHG 第 3 字段含空格 → 字段整体左移？`（ISS-090 同族），**rc=1**。修法：字段改成**单个 token**（`.check/spec/`），全名留在正文里；用 `mk-line-edit.js` + `fix-line-edit.js` 改（**行数不变**，64→44 字符）。⇒ **`CHG` 的「文件」字段必须是单个 token**（与「非行数的值一律记 `--`」是同一条纪律）。
+4. **测量口径的假红**：我 `grep -oE 'EXIT=[0-9]+'` 数出 `EXIT=1`×2 / `EXIT=2`×1，一度以为载体有失败 —— 实际那是 `AUDIT-EXITCODE-BIDIR` 尺子**故意构造的假失败**（它测「到达性」）。★ **量出「N 处」之前先问「我的尺子够长吗」**（工具差 ≠ 缺陷）。
+
+**F. 未做 / 边界（如实记）**
+
+- 放进 `.check/spec/` 的是**留证副本，不是原件** —— 若用户手上有更新版本，覆盖它或设 `ANDYNGO_SPEC`（**后者优先级最高**）。**判据此刻按 2026-09-16 版规格在判。**
+- 审计报告 §六 那条「**没有判据会问报告是否过期**」**仍然成立**（本轮没做那个判据）。
+- 审计发现的 **R1 / R2 / R3 / R5 / R7 / R10** 等**需要人裁决或动宿主配置**的项**本轮未动**（`settings.json` 是宿主配置，越出项目边界）。
+
+**G. 落账**
+
+`CHG-383`（规格新增 · 1224 行）· `CHG-384`（`hardcoded-count.js` 125→148）· `CHG-385`（`publish-privacy.js` 181→193）· `CHG-386`（`security-report.md` 152→161）⇒ `changes.md` **390 → 394 行**。
+判据复核：`probe-record-shape --scan` **rc=0** · `probe-crossref --scan` **rc=0**（命中 0 / 悬空 0）· `newid --check` **rc=0**。
+
+
+
